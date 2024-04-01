@@ -1,16 +1,17 @@
 """
 Hypnogram-related functions and class.
 """
-import mne
 import logging
 
+import mne
 # import warnings
 import numpy as np
 import pandas as pd
+from pandas.api.types import CategoricalDtype
+
 from yasa.io import set_log_level
 from yasa.plotting import plot_hypnogram
 from yasa.sleepstats import transition_matrix
-from pandas.api.types import CategoricalDtype
 
 __all__ = [
     "Hypnogram",
@@ -480,7 +481,7 @@ class Hypnogram:
         Name: Stage, dtype: int16
         """
         # Return as int16 (-32768 to 32767) to reduce memory usage
-        return self.hypno.replace(self.mapping).astype(np.int16)
+        return self.hypno.cat.rename_categories(self.mapping).astype(np.int16)
 
     def consolidate_stages(self, new_n_stages):
         """Reduce the number of stages in a hypnogram to match actigraphy or wearables.
