@@ -14,10 +14,14 @@
 .. image:: https://pepy.tech/badge/yasa
     :target: https://pepy.tech/badge/yasa
 
+.. image:: https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json
+  :target: https://github.com/astral-sh/ruff
+  :alt: Ruff
+
 ----------------
 
-.. figure::  /docs/pictures/yasa_logo.png
-   :align:   center
+.. figure:: https://raw.githubusercontent.com/raphaelvallat/yasa/refs/tags/v0.6.5/docs/pictures/yasa_logo.png
+   :align: center
 
 **YASA** (*Yet Another Spindle Algorithm*) is a command-line sleep analysis toolbox in Python. The main functions of YASA are:
 
@@ -27,7 +31,7 @@
 * Spectral analyses: bandpower, phase-amplitude coupling, 1/f slope, and more!
 * Hypnogram analysis: sleep statistics and stage transitions.
 
-For more details, try the `quickstart <https://raphaelvallat.com/yasa/build/html/quickstart.html>`_ or read the `FAQ <https://raphaelvallat.com/yasa/build/html/faq.html>`_.
+For more details, try the `quickstart <https://raphaelvallat.github.io/yasa/quickstart.html>`_ or read the `FAQ <https://raphaelvallat.github.io/yasa/faq.html>`_.
 
 ----------------
 
@@ -47,6 +51,15 @@ Alternatively, YASA can be installed with conda:
   conda config --add channels conda-forge
   conda config --set channel_priority strict
   conda install yasa
+
+To build and install from source, clone this repository or download the source archive and decompress the files
+
+.. code-block:: shell
+
+  cd yasa
+  pip install ".[test]"              # install the package
+  pip install --editable ".[test]"   # or editable install
+  pytest                             # test the package
 
 **What are the prerequisites for using YASA?**
 
@@ -75,7 +88,7 @@ If you have sleep EEG data in standard formats (e.g. EDF or BrainVision), you ca
 How do I get started with YASA?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to dive right in, you can simply go to the main `documentation <https://raphaelvallat.com/yasa/build/html/quickstart.html>`_ and try to apply YASA's functions on your own EEG data.
+If you want to dive right in, you can simply go to the main `documentation <https://raphaelvallat.github.io/yasa/quickstart.html>`_ and try to apply YASA's functions on your own EEG data.
 However, for most users, we strongly recommend that you first try running the examples Jupyter notebooks to get a sense of how YASA works and what it can do!
 The notebooks also come with example datasets so they should work right out of the box as long as you've installed YASA first.
 The notebooks and datasets can be found on `GitHub <https://github.com/raphaelvallat/yasa/tree/master/notebooks>`_ (make sure that you download the whole *notebooks/* folder). A short description of all notebooks is provided below:
@@ -111,8 +124,8 @@ Gallery
 
 Below some plots demonstrating the functionalities of YASA. To reproduce these, check out the `tutorial (Jupyter notebooks) <https://github.com/raphaelvallat/yasa/tree/master/notebooks>`_.
 
-.. figure::  /docs/pictures/gallery.png
-  :align:   center
+.. figure:: https://raw.githubusercontent.com/raphaelvallat/yasa/refs/tags/v0.6.5/docs/pictures/gallery.png
+  :align: center
 
   *The top plot show an overlay of the detected spindles on real EEG data. The middle left panel shows a time-frequency representation of the whole-night recording (spectrogram), plotted with the hypnogram (sleep stages) on top. The middle right panel shows the sleep stage probability transition matrix, calculated across the entire night. The bottom row shows, from left to right: a topographic plot, the average template of all detected slow-waves across the entire night stratified by channels, and a phase-amplitude coupling comodulogram.*
 
