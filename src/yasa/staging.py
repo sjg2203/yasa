@@ -40,8 +40,7 @@ class SleepStaging:
     eeg_name : str
         The name of the EEG channel in ``raw``. Preferentially a central
         electrode referenced either to the mastoids (C4-M1, C3-M2) or to the
-        Fpz electrode (C4-Fpz). Data are assumed to be in Volts (MNE default)
-        and will be converted to uV.
+        Fpz electrode (C4-Fpz).
     eog_name : str or None
         The name of the EOG channel in ``raw``. Preferentially,
         the left LOC channel referenced either to the mastoid (e.g. E1-M2)
@@ -67,7 +66,7 @@ class SleepStaging:
     We provide below some key points on the algorithm and its validation. For more details,
     we refer the reader to the peer-reviewed publication. If you have any questions,
     make sure to first check the
-    `FAQ section <https://raphaelvallat.github.io/yasa/faq.html>`_ of the documentation.
+    `FAQ section <https://yasa-sleep.org/faq.html>`_ of the documentation.
     If you did not find the answer to your question, please feel free to open an issue on GitHub.
 
     **1. Features extraction**
@@ -88,12 +87,14 @@ class SleepStaging:
     In addition, the algorithm also calculates a smoothed and normalized version of these features.
     Specifically, a 7.5 min centered triangular-weighted rolling average and a 2 min past rolling
     average are applied. The resulting smoothed features are then normalized using a robust
-    z-score.
+    z-score. The algorithm assumes data are in micro-Volts.
 
-    .. important:: The PSG data should be in micro-Volts. Do NOT transform (e.g. z-score) or filter
-        the signal before running the sleep staging algorithm.
+    .. important:: Do NOT transform (e.g. z-score) or filter the signal before running
+        the sleep staging algorithm.
 
     The data are automatically downsampled to 100 Hz for faster computation.
+
+    The data are automatically converted to micro-Volts if necessary.
 
     **2. Sleep stages prediction**
 
@@ -159,7 +160,7 @@ class SleepStaging:
 
     The sleep scores can then be manually edited in an external graphical user interface
     (e.g. EDFBrowser), as described in the
-    `FAQ <https://raphaelvallat.github.io/yasa/faq.html>`_.
+    `FAQ <https://yasa-sleep.org/faq.html>`_.
     """
 
     def __init__(self, raw, eeg_name, *, eog_name=None, emg_name=None, metadata=None):

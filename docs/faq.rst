@@ -26,6 +26,18 @@ Loading and visualizing polysomnography data
         # Select a subset of EEG channels
         raw.pick(["C4-A1", "C3-A2"])
 
+.. ----------------------------- LOAD EDF -----------------------------
+.. dropdown:: Should my data be in Volts or micro-Volts?
+    :animate: fade-in-slide-down
+    :icon: question
+    :name: what_voltage
+
+    Where EEG data is concerned, YASA's algorithms are designed to work with data in units of micro-Volts.
+    When ``data`` is passed to a YASA function as a :py:class:`~numpy.ndarray`, the unit must be micro-Volts (uV).
+    For most functions, YASA allows the ``data`` parameter to be either a :py:class:`numpy.ndarray` or a :py:class:`mne.io.BaseRaw`.
+    Instances of :py:class:`~mne.io.BaseRaw` have unit information included in them, so in these cases, YASA will handle any
+    necessary conversions by extracting the data internally in the required units (using :py:meth:`~mne.io.BaseRaw.get_data`).
+
 .. ----------------------------- VISUALIZE -----------------------------
 .. dropdown:: Can I visualize my polysomnography data in YASA?
     :animate: fade-in-slide-down
@@ -86,7 +98,7 @@ Event detection
     :icon: question
     :name: edit_detection
 
-    YASA does not currently support visual editing of the detected events. However, you can import the events as annotations in `EDFBrowser <https://www.teuniz.net/edfbrowser/>`_ and edit the events from there. If you simply want to visualize the detected events (no editing), you can also use the `plot_detection <https://raphaelvallat.github.io/yasa/generated/yasa.SpindlesResults.html#yasa.SpindlesResults.plot_detection>`_ method.
+    YASA does not currently support visual editing of the detected events. However, you can import the events as annotations in `EDFBrowser <https://www.teuniz.net/edfbrowser/>`_ and edit the events from there. If you simply want to visualize the detected events (no editing), you can also use the `plot_detection <https://yasa-sleep.org/generated/yasa.SpindlesResults.html#yasa.SpindlesResults.plot_detection>`_ method.
 
 
 .. ############################################################################
@@ -213,6 +225,28 @@ Others
     .. code-block:: shell
 
         pip install --upgrade yasa
+        pip install --upgrade yasa
+
+
+.. ----------------------------- DEVELOPMENT -----------------------------
+.. raw:: html
+
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h5 class="panel-title">
+          <a data-toggle="collapse" href="#development">Development</a>
+        </h5>
+      </div>
+      <div id="development" class="panel-collapse collapse">
+        <div class="panel-body">
+
+**YASA Flaskified**
+
+YASA Flaskified is a web-based application for analyzing EEG data using YASA. It requires deployment on a physical or virtual server, which can be done using the scripts provided in its repository. For more details, visit the **[YASA Flaskified GitHub repository](https://github.com/bartromb/YASAFlaskified)**.
+
+        </div>
+      </div>
+    </div>
 
 .. ----------------------------- DONATION -----------------------------
 .. dropdown:: I am not a programmer, how can I contribute to YASA?

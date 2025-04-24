@@ -144,7 +144,7 @@ def compute_features_stage(
     # minutes_of_WN = (hypno_WN == 7).sum() / (60 * raw.info['sfreq'])
 
     # Keep only EEG channels and copy to avoid in-place modification
-    raw_eeg = raw.copy().pick_types(eeg=True)
+    raw_eeg = raw.copy().pick("eeg")
 
     # Remove flat channels
     bool_flat = raw_eeg.get_data().std(axis=1) == 0
@@ -246,7 +246,7 @@ def compute_features_stage(
 
     # Detect spindles in N2 and N3
     # Thresholds have to be tuned with visual scoring of a subset of data
-    # https://raphaelvallat.github.io/yasa/generated/yasa.spindles_detect.html
+    # https://yasa-sleep.org/generated/yasa.spindles_detect.html
     sp = yasa.spindles_detect(raw_eeg, hypno=hypno, **spindles_params)
 
     df_sp = sp.summary(grp_chan=True, grp_stage=True).reset_index()

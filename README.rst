@@ -31,7 +31,7 @@
 * Spectral analyses: bandpower, phase-amplitude coupling, 1/f slope, and more!
 * Hypnogram analysis: sleep statistics and stage transitions.
 
-For more details, try the `quickstart <https://raphaelvallat.github.io/yasa/quickstart.html>`_ or read the `FAQ <https://raphaelvallat.github.io/yasa/faq.html>`_.
+For more details, try the `quickstart <https://yasa-sleep.org/quickstart.html>`_ or read the `FAQ <https://yasa-sleep.org/faq.html>`_.
 
 ----------------
 
@@ -88,7 +88,7 @@ If you have sleep EEG data in standard formats (e.g. EDF or BrainVision), you ca
 How do I get started with YASA?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to dive right in, you can simply go to the main `documentation <https://raphaelvallat.github.io/yasa/quickstart.html>`_ and try to apply YASA's functions on your own EEG data.
+If you want to dive right in, you can simply go to the main `documentation <https://yasa-sleep.org/quickstart.html>`_ and try to apply YASA's functions on your own EEG data.
 However, for most users, we strongly recommend that you first try running the examples Jupyter notebooks to get a sense of how YASA works and what it can do!
 The notebooks also come with example datasets so they should work right out of the box as long as you've installed YASA first.
 The notebooks and datasets can be found on `GitHub <https://github.com/raphaelvallat/yasa/tree/master/notebooks>`_ (make sure that you download the whole *notebooks/* folder). A short description of all notebooks is provided below:
@@ -132,11 +132,14 @@ Below some plots demonstrating the functionalities of YASA. To reproduce these, 
 Development
 ~~~~~~~~~~~
 
-YASA was created and is maintained by `Raphael Vallat <https://raphaelvallat.com>`_, a former postdoctoral researcher in `Matthew Walker's lab <https://www.humansleepscience.com/>`_ at UC Berkeley. Contributions are more than welcome so feel free to contact me, open an issue or submit a pull request!
+* YASA was created and is maintained by `Raphael Vallat <https://raphaelvallat.com>`_, a former postdoctoral researcher in `Matthew Walker's lab <https://www.humansleepscience.com/>`_ at UC Berkeley. Contributions are more than welcome so feel free to contact me, open an issue or submit a pull request!
 
-To see the code or report a bug, please visit the `GitHub repository <https://github.com/raphaelvallat/yasa>`_.
+  To see the code or report a bug, please visit the `GitHub repository <https://github.com/raphaelvallat/yasa>`_.
 
-Note that this program is provided with NO WARRANTY OF ANY KIND.
+  Note that this program is provided with NO WARRANTY OF ANY KIND.
+
+* YASA Flaskified is a web-based tool built on YASA that allows EEG analysis through a browser interface. It requires deployment on a server, which can be done using the preconfigured scripts available in the repository. For more details, visit the `YASA Flaskified GitHub repository <https://github.com/bartromb/YASAFlaskified>`_.
+
 
 Citation
 ~~~~~~~~
@@ -144,3 +147,5 @@ Citation
 To cite YASA, please use the `eLife publication <https://elifesciences.org/articles/70092>`_:
 
 * Vallat, Raphael, and Matthew P. Walker. "An open-source, high-performance tool for automated sleep staging." Elife 10 (2021). doi: https://doi.org/10.7554/eLife.70092
+
+
