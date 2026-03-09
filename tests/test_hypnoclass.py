@@ -1,6 +1,10 @@
 """Test the class Hypnogram."""
 
+import json
+import os
+import tempfile
 import unittest
+import warnings
 
 import matplotlib.pyplot as plt
 import mne
@@ -8,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from yasa.hypno import Hypnogram, hypno_str_to_int, simulate_hypnogram
+from yasa.hypno import Hypnogram, hypno_int_to_str, hypno_str_to_int, simulate_hypnogram
 
 
 def create_raw(npts, ch_names=["F4-M1", "F3-M2"], sf=100):
@@ -55,7 +59,7 @@ class TestHypnoClass(unittest.TestCase):
         assert hyp.scorer == "Test"
         assert hyp.sampling_frequency == 1 / 15
         assert hyp.freq == "15s"
-        assert hyp.start == "2022-11-10 13:30:10"
+        assert hyp.start == pd.Timestamp("2022-11-10 13:30:10")
         assert hyp.n_epochs == len(values)
         assert hyp.duration == 60
         assert hyp.timedelta[0] == pd.Timedelta("0 days 00:00:00")
@@ -124,7 +128,7 @@ class TestHypnoClass(unittest.TestCase):
         assert shyp.hypno.index.name == hyp.hypno.index.name
         assert shyp.sampling_frequency == hyp.sampling_frequency
         assert hyp.simulate_similar(tib=2, scorer="YASA").scorer == "YASA"
-        assert hyp.simulate_similar(tib=2, start="2022-11-10").start == "2022-11-10"
+        assert hyp.simulate_similar(tib=2, start="2022-11-10").start == pd.Timestamp("2022-11-10")
         np.testing.assert_array_equal(
             simulate_hypnogram(seed=1).simulate_similar(tib=5, seed=6).as_int(),
             [0, 0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -201,3 +205,656 @@ class TestHypnoClass(unittest.TestCase):
         assert hyp.consolidate_stages(new_n_stages=4).n_stages == 4
         assert hyp.consolidate_stages(new_n_stages=3).n_stages == 3
         assert hyp.consolidate_stages(new_n_stages=2).n_stages == 2
+
+    def test_from_integers(self):
+        """Test Hypnogram.from_integers classmethod."""
+        # --- default mapping, 5-stage ---
+        int_hypno = np.array([0, 0, 1, 2, 3, 2, 4, 4, 0])
+        hyp = Hypnogram.from_integers(int_hypno)
+        assert isinstance(hyp, Hypnogram)
+        assert hyp.n_stages == 5
+        assert hyp.freq == "30s"
+        assert hyp.n_epochs == len(int_hypno)
+        assert hyp.start is None
+        assert hyp.scorer is None
+        expected_str = np.array(["WAKE", "WAKE", "N1", "N2", "N3", "N2", "REM", "REM", "WAKE"])
+        np.testing.assert_array_equal(hyp.hypno.to_numpy(), expected_str)
+
+        # round-trip: from_integers -> as_int should recover the original array
+        np.testing.assert_array_equal(hyp.as_int().to_numpy(), int_hypno)
+
+        # --- list input ---
+        hyp_list = Hypnogram.from_integers([0, 1, 2, 3, 4])
+        assert hyp_list.n_epochs == 5
+        np.testing.assert_array_equal(hyp_list.hypno.to_numpy(), ["WAKE", "N1", "N2", "N3", "REM"])
+
+        # --- pd.Series input ---
+        hyp_series = Hypnogram.from_integers(pd.Series([0, 2, 4]))
+        np.testing.assert_array_equal(hyp_series.hypno.to_numpy(), ["WAKE", "N2", "REM"])
+
+        # --- ART / UNS epochs (-1, -2) ---
+        hyp_art = Hypnogram.from_integers([-1, -2, 0, 2])
+        np.testing.assert_array_equal(hyp_art.hypno.to_numpy(), ["ART", "UNS", "WAKE", "N2"])
+
+        # --- optional kwargs forwarded correctly ---
+        hyp_kw = Hypnogram.from_integers(
+            int_hypno, freq="30s", start="2023-01-01 22:00:00", scorer="S1"
+        )
+        assert isinstance(hyp_kw.hypno.index, pd.DatetimeIndex)
+        assert hyp_kw.hypno.index.name == "Time"
+        assert hyp_kw.scorer == "S1"
+        assert hyp_kw.hypno.name == "S1"
+        assert hyp_kw.start == pd.Timestamp("2023-01-01 22:00:00")
+
+        # --- custom mapping ---
+        custom = {1: "W", 2: "R", 3: "N1", 4: "N2", 5: "N3"}
+        hyp_custom = Hypnogram.from_integers([1, 3, 4, 5, 2], mapping=custom)
+        np.testing.assert_array_equal(
+            hyp_custom.hypno.to_numpy(), ["WAKE", "N1", "N2", "N3", "REM"]
+        )
+
+        # --- consistency with hypno_int_to_str ---
+        int_arr = np.array([0, 1, 2, 3, 4, -1, -2])
+        str_arr = hypno_int_to_str(int_arr)
+        hyp_via_fn = Hypnogram(str_arr)
+        hyp_via_cls = Hypnogram.from_integers(int_arr)
+        np.testing.assert_array_equal(hyp_via_fn.hypno.to_numpy(), hyp_via_cls.hypno.to_numpy())
+
+        # --- invalid integer (not in mapping) raises ---
+        with pytest.raises(Exception):
+            Hypnogram.from_integers([0, 99])
+
+    def test_json_roundtrip(self):
+        """Test that to_json / from_json preserves all metadata."""
+
+        stages = ["W", "W", "N1", "N2", "N3", "REM", "W"]
+
+        # Basic round-trip: no start, no scorer, no proba
+        hyp = Hypnogram(stages, freq="30s")
+        fd, fname = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            hyp.to_json(fname)
+            hyp2 = Hypnogram.from_json(fname)
+            assert hyp2.freq == hyp.freq
+            assert hyp2.n_stages == hyp.n_stages
+            assert hyp2.start is None
+            assert hyp2.scorer is None
+            assert hyp2.proba is None
+            np.testing.assert_array_equal(hyp2.hypno.to_numpy(), hyp.hypno.to_numpy())
+        finally:
+            os.unlink(fname)
+
+        # With tz-aware start and scorer
+        hyp_ts = Hypnogram(
+            stages, freq="30s", start="2024-01-15 23:00:00", tz="UTC", scorer="Expert"
+        )
+        fd, fname = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            hyp_ts.to_json(fname)
+            hyp_ts2 = Hypnogram.from_json(fname)
+            assert hyp_ts2.start == hyp_ts.start
+            assert hyp_ts2.scorer == "Expert"
+            assert hyp_ts2.start.tzinfo is not None  # tz preserved
+        finally:
+            os.unlink(fname)
+
+        # File is valid JSON
+        fd, fname = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            hyp.to_json(fname)
+            with open(fname) as f:
+                parsed = json.load(f)
+            assert set(parsed.keys()) == {"values", "n_stages", "freq", "start", "scorer", "proba"}
+        finally:
+            os.unlink(fname)
+
+    def test_dict_roundtrip(self):
+        """Test that to_dict / from_dict preserves all metadata."""
+        stages = ["W", "W", "N1", "N2", "N3", "REM", "W"]
+
+        # Basic round-trip: no start, no scorer, no proba
+        hyp = Hypnogram(stages, freq="30s")
+        d = hyp.to_dict()
+        assert isinstance(d, dict)
+        assert set(d.keys()) == {"values", "n_stages", "freq", "start", "scorer", "proba"}
+        assert d["start"] is None
+        assert d["scorer"] is None
+        assert d["proba"] is None
+        assert d["values"] == list(hyp.hypno.to_numpy())
+        hyp2 = Hypnogram.from_dict(d)
+        assert hyp2.freq == hyp.freq
+        assert hyp2.n_stages == hyp.n_stages
+        assert hyp2.start is None
+        assert hyp2.scorer is None
+        assert hyp2.proba is None
+        np.testing.assert_array_equal(hyp2.hypno.to_numpy(), hyp.hypno.to_numpy())
+
+        # With tz-aware start and scorer
+        hyp_ts = Hypnogram(
+            stages, freq="30s", start="2024-01-15 23:00:00", tz="UTC", scorer="Expert"
+        )
+        d_ts = hyp_ts.to_dict()
+        assert d_ts["scorer"] == "Expert"
+        assert d_ts["start"] == "2024-01-15T23:00:00+00:00"  # isoformat with tz
+        hyp_ts2 = Hypnogram.from_dict(d_ts)
+        assert hyp_ts2.start == hyp_ts.start
+        assert hyp_ts2.scorer == "Expert"
+        assert hyp_ts2.start.tzinfo is not None
+
+        # to_dict and to_json produce identical serializable content
+
+        fd, fname = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            hyp_ts.to_json(fname)
+            with open(fname) as f:
+                from_file = json.load(f)
+            assert from_file == hyp_ts.to_dict()
+        finally:
+            os.unlink(fname)
+
+        # proba round-trip and 6-decimal rounding
+        proba = pd.DataFrame(
+            {
+                "WAKE": [0.8, 0.1],
+                "N1": [0.1, 0.2],
+                "N2": [0.05, 0.4],
+                "N3": [0.03, 0.2],
+                "REM": [0.02, 0.1],
+            },
+        )
+        hyp_p = Hypnogram(["W", "N2"], freq="30s", proba=proba)
+        d_p = hyp_p.to_dict()
+        assert d_p["proba"] is not None
+        # All values rounded to ≤ 6 decimal places
+        for col_vals in d_p["proba"].values():
+            for v in col_vals:
+                assert v == round(v, 6)
+        hyp_p2 = Hypnogram.from_dict(d_p)
+        pd.testing.assert_frame_equal(hyp_p2.proba, hyp_p.proba.round(6), check_like=True)
+
+
+# ---------------------------------------------------------------------------
+# __init__ — invalid stage values
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_stage_raises():
+    with pytest.raises(ValueError, match="do not match"):
+        Hypnogram(["W", "N1", "DREAM"])
+
+
+def test_invalid_stage_wrong_n_stages_hint():
+    # "S" is only accepted for n_stages=2; using it with n_stages=5 triggers
+    # the "specify n_stages=..." hint in the error message.
+    with pytest.raises(ValueError, match="n_stages"):
+        Hypnogram(["W", "S", "S"], n_stages=5)
+
+
+# ---------------------------------------------------------------------------
+# __len__, __eq__, __getitem__
+# ---------------------------------------------------------------------------
+
+_STAGES = ["W", "W", "N1", "N2", "N3", "REM", "W"]  # 7 epochs
+
+
+def test_len():
+    assert len(Hypnogram(_STAGES)) == len(_STAGES)
+
+
+def test_eq_non_hypnogram_returns_not_implemented():
+    assert Hypnogram(_STAGES).__eq__("not a Hypnogram") is NotImplemented
+
+
+def test_eq_different_lengths_raises():
+    with pytest.raises(ValueError, match="different numbers"):
+        Hypnogram(_STAGES) == Hypnogram(_STAGES[:4])
+
+
+def test_eq_returns_boolean_array():
+    hyp1 = Hypnogram(["W", "N2", "REM"])
+    hyp2 = Hypnogram(["W", "N3", "REM"])
+    np.testing.assert_array_equal(hyp1 == hyp2, [True, False, True])
+
+
+def test_getitem_negative_index():
+    assert Hypnogram(_STAGES)[-1].hypno.iloc[0] == "WAKE"
+
+
+def test_getitem_advances_start():
+    hyp = Hypnogram(_STAGES, start="2024-01-01 23:00:00")
+    assert hyp[2].start == pd.Timestamp("2024-01-01 23:01:00")  # 2 × 30 s
+
+
+def test_getitem_step_raises():
+    with pytest.raises(ValueError, match="Step"):
+        Hypnogram(_STAGES)[::2]
+
+
+def test_getitem_empty_slice_raises():
+    with pytest.raises(IndexError, match="empty"):
+        Hypnogram(_STAGES)[5:3]
+
+
+def test_getitem_bad_type_raises():
+    with pytest.raises(TypeError):
+        Hypnogram(_STAGES)["bad"]
+
+
+def test_getitem_preserves_proba():
+    proba = pd.DataFrame(
+        {
+            "WAKE": [1.0, 0.0, 0.0],
+            "N1": [0.0, 1.0, 0.0],
+            "N2": [0.0, 0.0, 1.0],
+            "N3": [0.0, 0.0, 0.0],
+            "REM": [0.0, 0.0, 0.0],
+        }
+    )
+    hyp = Hypnogram(["W", "N1", "N2"], proba=proba)
+    sliced = hyp[0:2]
+    assert sliced.proba is not None
+    assert len(sliced.proba) == 2
+
+
+# ---------------------------------------------------------------------------
+# end property
+# ---------------------------------------------------------------------------
+
+
+def test_end_none_when_no_start():
+    assert Hypnogram(_STAGES).end is None
+
+
+def test_end_computed_when_start_set():
+    hyp = Hypnogram(_STAGES, start="2024-01-01 23:00:00")  # 7 × 30 s = 3.5 min
+    assert hyp.end == pd.Timestamp("2024-01-01 23:03:30")
+
+
+# ---------------------------------------------------------------------------
+# mapping.setter — auto-fills ART / UNS; preserves custom values when present
+# ---------------------------------------------------------------------------
+
+
+def test_mapping_setter_fills_art_uns():
+    hyp = Hypnogram(["W", "N1", "N2", "N3", "REM"])
+    hyp.mapping = {"WAKE": 0, "N1": 1, "N2": 2, "N3": 3, "REM": 4}
+    assert hyp.mapping["ART"] == -1
+    assert hyp.mapping["UNS"] == -2
+
+
+def test_mapping_setter_keeps_existing_art_uns():
+    hyp = Hypnogram(["W", "N1", "N2", "N3", "REM"])
+    hyp.mapping = {"WAKE": 0, "N1": 1, "N2": 2, "N3": 3, "REM": 4, "ART": -9, "UNS": -8}
+    assert hyp.mapping["ART"] == -9
+    assert hyp.mapping["UNS"] == -8
+
+
+# ---------------------------------------------------------------------------
+# consolidate_stages — 5-stage → 4-stage path (N1/N2 → LIGHT, N3 → DEEP)
+# ---------------------------------------------------------------------------
+
+
+def test_consolidate_5_to_4():
+    hyp = simulate_hypnogram(tib=60, n_stages=5, seed=0)
+    hyp4 = hyp.consolidate_stages(4)
+    assert hyp4.n_stages == 4
+    assert "LIGHT" in hyp4.labels
+    assert "N1" not in hyp4.labels
+
+
+# ---------------------------------------------------------------------------
+# crop
+# ---------------------------------------------------------------------------
+
+
+def test_crop_by_index():
+    hyp = Hypnogram(_STAGES)
+    cropped = hyp.crop(start=1, end=4)
+    assert cropped.n_epochs == 4
+    assert cropped.hypno.iloc[0] == "WAKE"
+
+
+def test_crop_by_timestamp():
+    # Epochs: 23:00:00 23:00:30 23:01:00 23:01:30 23:02:00 23:02:30 23:03:00
+    hyp = Hypnogram(_STAGES, start="2024-01-01 23:00:00")
+    cropped = hyp.crop(start="2024-01-01 23:01:00", end="2024-01-01 23:02:00")
+    assert cropped.start == pd.Timestamp("2024-01-01 23:01:00")
+    assert cropped.n_epochs == 3  # loc is inclusive on both ends
+
+
+def test_crop_timestamp_requires_start():
+    with pytest.raises(ValueError, match="start"):
+        Hypnogram(_STAGES).crop(start="2024-01-01 23:00:00")
+
+
+def test_crop_empty_raises():
+    with pytest.raises(ValueError, match="empty"):
+        Hypnogram(_STAGES).crop(start=5, end=3)
+
+
+# ---------------------------------------------------------------------------
+# evaluate
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_returns_epoch_by_epoch_agreement():
+    from yasa.evaluation import EpochByEpochAgreement
+
+    hyp_ref = Hypnogram(_STAGES, scorer="Expert")
+    hyp_obs = Hypnogram(_STAGES, scorer="YASA")
+    assert isinstance(hyp_ref.evaluate(hyp_obs), EpochByEpochAgreement)
+
+
+# ---------------------------------------------------------------------------
+# find_periods — non-integer threshold raises
+# ---------------------------------------------------------------------------
+
+
+def test_find_periods_non_integer_threshold_raises():
+    hyp = Hypnogram(["W"] * 20, freq="30s")
+    # 45 s × (1/30 Hz) = 1.5 samples → non-integer → ValueError
+    with pytest.raises(ValueError, match="whole number"):
+        hyp.find_periods(threshold="45s")
+
+
+# ---------------------------------------------------------------------------
+# pad
+# ---------------------------------------------------------------------------
+
+_PAD_STAGES = ["N2", "N2", "REM"]  # 3-epoch base hypnogram
+
+
+def test_pad_basic_uns():
+    """Default fill pads both ends with UNS."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=2, after=1)
+    assert padded.n_epochs == 6
+    assert padded.hypno.to_list() == ["UNS", "UNS", "N2", "N2", "REM", "UNS"]
+
+
+def test_pad_scalar_fill_label():
+    """Scalar fill_value applies the same stage to both ends."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=1, after=2, fill_value="WAKE")
+    assert padded.hypno.to_list() == ["WAKE", "N2", "N2", "REM", "WAKE", "WAKE"]
+
+
+def test_pad_edge():
+    """fill_value='edge' repeats first/last epoch on the respective end."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=2, after=1, fill_value="edge")
+    assert padded.hypno.to_list() == ["N2", "N2", "N2", "N2", "REM", "REM"]
+
+
+def test_pad_tuple_fill_value():
+    """Tuple fill_value sets different fill stages for before and after."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=1, after=2, fill_value=("UNS", "WAKE"))
+    assert padded.hypno.to_list() == ["UNS", "N2", "N2", "REM", "WAKE", "WAKE"]
+
+
+def test_pad_tuple_with_edge():
+    """Tuple can mix 'edge' with a concrete stage label."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=2, after=2, fill_value=("edge", "UNS"))
+    assert padded.hypno.to_list() == ["N2", "N2", "N2", "N2", "REM", "UNS", "UNS"]
+
+
+def test_pad_zero_is_noop():
+    """Padding with zero epochs returns identical values."""
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=0, after=0)
+    assert padded.hypno.to_list() == _PAD_STAGES
+
+
+def test_pad_only_before():
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(before=3)
+    assert padded.n_epochs == 6
+    assert padded.hypno.to_list()[:3] == ["UNS", "UNS", "UNS"]
+
+
+def test_pad_only_after():
+    hyp = Hypnogram(_PAD_STAGES)
+    padded = hyp.pad(after=2)
+    assert padded.n_epochs == 5
+    assert padded.hypno.to_list()[-2:] == ["UNS", "UNS"]
+
+
+def test_pad_preserves_metadata():
+    """n_stages, freq, scorer are preserved; proba is dropped."""
+    proba = pd.DataFrame(
+        {
+            "WAKE": [0.1, 0.1, 0.0],
+            "N1": [0.1, 0.1, 0.0],
+            "N2": [0.7, 0.7, 0.1],
+            "N3": [0.0, 0.0, 0.0],
+            "REM": [0.1, 0.1, 0.9],
+        }
+    )
+    hyp = Hypnogram(_PAD_STAGES, freq="30s", scorer="Expert", proba=proba)
+    padded = hyp.pad(before=1, after=1)
+    assert padded.freq == "30s"
+    assert padded.n_stages == hyp.n_stages
+    assert padded.scorer == "Expert"
+    assert padded.proba is None
+
+
+def test_pad_updates_start():
+    """Prepending n epochs shifts start back by n * freq."""
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    padded = hyp.pad(before=2)
+    assert padded.start == pd.Timestamp("2023-01-01 21:59:00")  # 2 × 30 s earlier
+    assert padded.end == hyp.end  # end unchanged
+
+
+def test_pad_start_none_stays_none():
+    """When Hypnogram has no start, padded Hypnogram also has no start."""
+    hyp = Hypnogram(_PAD_STAGES)
+    assert hyp.pad(before=2, after=2).start is None
+
+
+def test_pad_timestamp_before_exact():
+    """Timestamp-based before: exact multiple, no warning."""
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    with pytest.warns(UserWarning) as w:
+        # 75 s = 2.5 epochs → partial → warning
+        padded = hyp.pad(before="2023-01-01 21:58:45")
+    assert "flooring" in str(w[0].message)
+    assert padded.n_epochs == hyp.n_epochs + 2  # floor(2.5) = 2
+
+    # Exact multiple → no warning (21:59:30 to 22:00:00 = 30 s = 1 epoch)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        padded_exact = hyp.pad(before="2023-01-01 21:59:30")
+    assert padded_exact.n_epochs == hyp.n_epochs + 1
+    assert padded_exact.start == pd.Timestamp("2023-01-01 21:59:30")
+
+
+def test_pad_timestamp_after_exact():
+    """Timestamp-based after: exact multiple, no warning."""
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    # end = 22:01:30; after = 22:02:00 → 30 s = 1 epoch (exact)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        padded = hyp.pad(after="2023-01-01 22:02:00")
+    assert padded.n_epochs == hyp.n_epochs + 1
+    assert padded.end == pd.Timestamp("2023-01-01 22:02:00")
+
+
+def test_pad_timestamp_after_partial_warning():
+    """Fractional epoch count for 'after' triggers a UserWarning."""
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    # end = 22:01:30; after = 22:02:15 → 45 s = 1.5 epochs → floor to 1
+    with pytest.warns(UserWarning, match="flooring"):
+        padded = hyp.pad(after="2023-01-01 22:02:15")
+    assert padded.n_epochs == hyp.n_epochs + 1
+
+
+def test_pad_timestamp_requires_start():
+    hyp = Hypnogram(_PAD_STAGES)
+    with pytest.raises(ValueError, match="start"):
+        hyp.pad(before="2023-01-01 21:59:00")
+
+
+def test_pad_timestamp_before_not_before_start():
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    with pytest.raises(ValueError, match="strictly before"):
+        hyp.pad(before="2023-01-01 22:01:00")
+
+
+def test_pad_timestamp_after_not_after_end():
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00")
+    with pytest.raises(ValueError, match="strictly after"):
+        hyp.pad(after="2023-01-01 22:00:00")
+
+
+def test_pad_tz_mismatch_raises():
+    hyp = Hypnogram(_PAD_STAGES, start="2023-01-01 22:00:00", tz="UTC")
+    with pytest.raises(ValueError, match="timezone"):
+        hyp.pad(before="2023-01-01 21:59:00")  # tz-naive
+
+
+def test_pad_invalid_fill_value_raises():
+    hyp = Hypnogram(_PAD_STAGES)
+    with pytest.raises(ValueError, match="fill_value"):
+        hyp.pad(before=1, fill_value="DREAM")
+
+
+def test_pad_invalid_tuple_fill_value_raises():
+    hyp = Hypnogram(_PAD_STAGES)
+    with pytest.raises(ValueError, match="fill_value"):
+        hyp.pad(before=1, fill_value=("UNS", "DREAM"))
+
+
+def test_pad_tuple_wrong_length_raises():
+    hyp = Hypnogram(_PAD_STAGES)
+    with pytest.raises(ValueError, match="2 elements"):
+        hyp.pad(before=1, fill_value=("UNS", "WAKE", "N1"))
+
+
+def test_pad_negative_before_raises():
+    with pytest.raises(ValueError, match="non-negative"):
+        Hypnogram(_PAD_STAGES).pad(before=-1)
+
+
+def test_pad_negative_after_raises():
+    with pytest.raises(ValueError, match="non-negative"):
+        Hypnogram(_PAD_STAGES).pad(after=-2)
+
+
+def test_pad_bad_type_raises():
+    with pytest.raises(TypeError):
+        Hypnogram(_PAD_STAGES).pad(before=3.5)
+
+
+###############################################################################
+# plot_hypnodensity
+###############################################################################
+
+# Shared fixtures for hypnodensity tests
+_N = 100
+_rng = np.random.default_rng(0)
+
+
+def _make_proba(stages):
+    """Return a valid probability DataFrame for the given stage list."""
+    raw = _rng.dirichlet(np.ones(len(stages)), size=_N)
+    return pd.DataFrame(raw, columns=stages)
+
+
+def test_plot_hypnodensity_5stage_returns_axes():
+    proba = _make_proba(["WAKE", "N1", "N2", "N3", "REM"])
+    hyp = Hypnogram(
+        ["WAKE"] * 20 + ["N1"] * 10 + ["N2"] * 40 + ["N3"] * 20 + ["REM"] * 10, proba=proba
+    )
+    ax = hyp.plot_hypnodensity()
+    assert isinstance(ax, plt.Axes)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_4stage_returns_axes():
+    stages_seq = ["WAKE"] * 25 + ["LIGHT"] * 25 + ["DEEP"] * 25 + ["REM"] * 25
+    proba = _make_proba(["WAKE", "LIGHT", "DEEP", "REM"])
+    hyp = Hypnogram(stages_seq, n_stages=4, proba=proba)
+    ax = hyp.plot_hypnodensity()
+    assert isinstance(ax, plt.Axes)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_3stage_returns_axes():
+    stages_seq = ["WAKE"] * 34 + ["NREM"] * 33 + ["REM"] * 33
+    proba = _make_proba(["WAKE", "NREM", "REM"])
+    hyp = Hypnogram(stages_seq, n_stages=3, proba=proba)
+    ax = hyp.plot_hypnodensity()
+    assert isinstance(ax, plt.Axes)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_2stage_returns_axes():
+    stages_seq = ["WAKE"] * 50 + ["SLEEP"] * 50
+    proba = _make_proba(["WAKE", "SLEEP"])
+    hyp = Hypnogram(stages_seq, n_stages=2, proba=proba)
+    ax = hyp.plot_hypnodensity()
+    assert isinstance(ax, plt.Axes)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_no_proba_raises():
+    hyp = Hypnogram(["WAKE"] * 10 + ["N2"] * 90)
+    with pytest.raises(ValueError, match="proba"):
+        hyp.plot_hypnodensity()
+
+
+def test_plot_hypnodensity_with_start_uses_datetime_axis():
+    proba = _make_proba(["WAKE", "N1", "N2", "N3", "REM"])
+    hyp = Hypnogram(
+        ["WAKE"] * 20 + ["N1"] * 10 + ["N2"] * 40 + ["N3"] * 20 + ["REM"] * 10,
+        proba=proba,
+        start="2022-12-15 22:30:00",
+    )
+    ax = hyp.plot_hypnodensity()
+    assert isinstance(ax, plt.Axes)
+    # x-axis should use a DateFormatter when start is set
+    import matplotlib.dates as mdates
+
+    assert isinstance(ax.xaxis.get_major_formatter(), mdates.DateFormatter)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_accepts_ax_argument():
+    proba = _make_proba(["WAKE", "N1", "N2", "N3", "REM"])
+    hyp = Hypnogram(
+        ["WAKE"] * 20 + ["N1"] * 10 + ["N2"] * 40 + ["N3"] * 20 + ["REM"] * 10, proba=proba
+    )
+    fig, ax = plt.subplots()
+    returned_ax = hyp.plot_hypnodensity(ax=ax)
+    assert returned_ax is ax
+    plt.close("all")
+
+
+def test_plot_hypnodensity_custom_palette():
+    proba = _make_proba(["WAKE", "N1", "N2", "N3", "REM"])
+    hyp = Hypnogram(
+        ["WAKE"] * 20 + ["N1"] * 10 + ["N2"] * 40 + ["N3"] * 20 + ["REM"] * 10, proba=proba
+    )
+    custom = {"WAKE": "red", "N1": "green", "N2": "blue", "N3": "purple", "REM": "orange"}
+    ax = hyp.plot_hypnodensity(palette=custom)
+    assert isinstance(ax, plt.Axes)
+    plt.close("all")
+
+
+def test_plot_hypnodensity_ylim_and_legend():
+    proba = _make_proba(["WAKE", "N1", "N2", "N3", "REM"])
+    hyp = Hypnogram(
+        ["WAKE"] * 20 + ["N1"] * 10 + ["N2"] * 40 + ["N3"] * 20 + ["REM"] * 10, proba=proba
+    )
+    ax = hyp.plot_hypnodensity()
+    assert ax.get_ylim() == (0, 1)
+    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert set(legend_labels) == {"WAKE", "N1", "N2", "N3", "REM"}
+    plt.close("all")

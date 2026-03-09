@@ -49,12 +49,6 @@ Loading and visualizing polysomnography data
     .. figure:: https://raw.githubusercontent.com/raphaelvallat/yasa/refs/tags/v0.6.5/docs/pictures/edfbrowser_with_hypnogram.png
         :align: center
 
-.. ----------------------------- HYPNOGRAM -----------------------------
-.. .. dropdown:: How can I read an hypnogram file in YASA?
-..     :animate: fade-in-slide-down
-..     :icon: question
-
-
 .. ############################################################################
 .. ############################################################################
 ..                                  DETECTION
@@ -70,9 +64,9 @@ Event detection
     :icon: question
     :name: detection_algo
 
-    The **spindles** detection is a custom adaptation of the `Lacourse et al 2018 <https://doi.org/10.1016/j.jneumeth.2018.08.014>`_ method. A step-by-step description of the algorithm can be found in `this notebook <https://github.com/raphaelvallat/yasa/blob/develop/notebooks/01_spindles_detection.ipynb>`_.
+    The **spindles** detection is a custom adaptation of the `Lacourse et al 2018 <https://doi.org/10.1016/j.jneumeth.2018.08.014>`_ method. A step-by-step description of the algorithm can be found in `this notebook <https://github.com/raphaelvallat/yasa/blob/master/notebooks/01_spindles_detection.ipynb>`_.
 
-    The **slow-waves detection** combines the methods proposed in `Massimini et al 2004 <https://www.jneurosci.org/content/24/31/6862>`_ and `Carrier et al 2011 <https://doi.org/10.1111/j.1460-9568.2010.07543.x>`_. A step-by-step description of the algorithm can be found `here <https://github.com/raphaelvallat/yasa/blob/develop/notebooks/05_sw_detection.ipynb>`_.
+    The **slow-waves detection** combines the methods proposed in `Massimini et al 2004 <https://www.jneurosci.org/content/24/31/6862>`_ and `Carrier et al 2011 <https://doi.org/10.1111/j.1460-9568.2010.07543.x>`_. A step-by-step description of the algorithm can be found `here <https://github.com/raphaelvallat/yasa/blob/master/notebooks/05_sw_detection.ipynb>`_.
 
     .. important::
         Both algorithms have parameters that can (and should) be fine-tuned to your data, as explained in the next question.
@@ -162,33 +156,6 @@ Sleep staging
     .. figure:: https://raw.githubusercontent.com/raphaelvallat/yasa/refs/tags/v0.6.5/docs/pictures/edfbrowser_with_hypnogram.png
         :align: center
 
-    **SpiSOP**
-
-    `SpiSOP <https://www.spisop.org/>`_ is an open-source Matlab toolbox for the analysis and visualization of polysomnography sleep data. It comes with a sleep scoring GUI.
-    As explained in `the documentation <https://www.spisop.org/faq/#What_is_needed_to_run_SpiSOP_and_in_what_format>`_, the hypnogram should be a tab-separated text file with two columns (no headers). The first column has the sleep stages (0: Wake, 1: N1, 2: N2, 3: N3, 5: REM) and the second column indicates whether the current epoch should be marked as artefact (1) or valid (0).
-
-    .. code-block:: python
-
-        hypno_int = pd.Series(hypno).map({"W": 0, "N1": 1, "N2": 2, "N3": 3, "R": 5}).to_numpy()
-        hypno_export = pd.DataFrame({"label": hypno_int, "artefact": 0})
-        hypno_export.to_csv("my_hypno_SpiSOP.txt", sep="\t", header=False, index=False)
-
-    **Visbrain**
-
-    `Visbrain <https://visbrain.org/sleep.html>`_ is an open-source Python toolbox that includes a module for visualizing polysomnography sleep data and scoring sleep (see screenshot below).
-
-    .. figure:: https://raw.githubusercontent.com/raphaelvallat/yasa/refs/tags/v0.6.5/docs/pictures/visbrain.PNG
-        :align: center
-
-    Visbrain accepts several `formats for the hypnogram <https://visbrain.org/sleep.html#hypnogram>`_. The code below show how to export the hypnogram in the `Elan software format <https://pubmed.ncbi.nlm.nih.gov/21687568/>`_ (i.e. a text file with the *.hyp* extension):
-
-    .. code-block:: python
-
-        hypno_int = pd.Series(hypno).map({"W": 0, "N1": 1, "N2": 2, "N3": 3, "R": 5}).to_numpy()
-        header = "time_base 30\nsampling_period 1/30\nepoch_nb %i\nepoch_list" % len(hypno_int)
-        np.savetxt("my_hypno_Visbrain.txt", hypno_int, fmt="%s", delimiter=",", newline="\n",
-                   header=header, comments="", encoding="utf-8")
-
 .. ----------------------------- ANIMAL DATA -----------------------------
 .. dropdown:: Can I use YASA to score animal data and/or human intracranial data?
     :animate: fade-in-slide-down
@@ -219,42 +186,35 @@ Others
     :icon: question
     :name: collapse_release
 
-    You can click "Watch" on the `YASA GitHub repository <https://github.com/raphaelvallat/yasa>`_.
-    Whenever a new release is out there, you can upgrade your version by typing the following line in a terminal window:
+    You can click "Watch" on the `YASA GitHub repository <https://github.com/raphaelvallat/yasa>`_ and
+    select "Releases only" to receive email notifications whenever a new version is published.
 
-    .. code-block:: shell
+    To upgrade to the latest version, run the following in a terminal:
 
-        pip install --upgrade yasa
-        pip install --upgrade yasa
+    .. tab-set::
+
+        .. tab-item:: pip
+
+            .. code-block:: shell
+
+                pip install --upgrade yasa
+
+        .. tab-item:: uv
+
+            .. code-block:: shell
+
+                uv pip install --upgrade yasa
 
 
 .. ----------------------------- DEVELOPMENT -----------------------------
-.. raw:: html
-
-    <div class="panel panel-default">
-      <div class="panel-heading">
-        <h5 class="panel-title">
-          <a data-toggle="collapse" href="#development">Development</a>
-        </h5>
-      </div>
-      <div id="development" class="panel-collapse collapse">
-        <div class="panel-body">
-
-**YASA Flaskified**
-
-YASA Flaskified is a web-based application for analyzing EEG data using YASA. It requires deployment on a physical or virtual server, which can be done using the scripts provided in its repository. For more details, visit the **[YASA Flaskified GitHub repository](https://github.com/bartromb/YASAFlaskified)**.
-
-        </div>
-      </div>
-    </div>
-
-.. ----------------------------- DONATION -----------------------------
-.. dropdown:: I am not a programmer, how can I contribute to YASA?
+.. dropdown:: Is there a graphical user interface (GUI) for YASA?
     :animate: fade-in-slide-down
     :icon: question
-    :name: collapse_donate
+    :name: collapse_development
 
-    There are many ways to contribute to YASA, even if you are not a programmer, for example, reporting bugs or results that are inconsistent with other softwares, improving the documentation and examples, or, even `buying the developers a coffee <https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=K2FZVJGCKYPAG&currency_code=USD&source=url>`_!
+    `YASA Flaskified <https://github.com/bartromb/YASAFlaskified>`_ is a web-based application for
+    analyzing EEG data using YASA. It requires deployment on a physical or virtual server, which can
+    be done using the scripts provided in its repository.
 
 .. ----------------------------- CITING YASA -----------------------------
 .. dropdown:: How can I cite YASA?

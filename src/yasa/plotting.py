@@ -82,11 +82,14 @@ def plot_hypnogram(hyp, sf_hypno=1 / 30, highlight="REM", fill_color=None, ax=No
         >>> hyp_a.plot_hypnogram(lw=1, fill_color="whitesmoke", highlight=None, ax=axes[0])
         >>> hyp_b.plot_hypnogram(lw=1, fill_color="whitesmoke", highlight=None, ax=axes[1])
     """
-    from yasa.hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
+    from .hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
 
     if not isinstance(hyp, Hypnogram):
         # Convert sampling frequency to pandas timefrequency string (e.g., "30s")
         freq_str = pd.tseries.frequencies.to_offset(pd.Timedelta(1 / sf_hypno, "s")).freqstr
+        # Prepend "1" if freqstr has no numeric prefix (e.g. "s" -> "1s" when sf_hypno=1)
+        if not freq_str[0].isdigit():
+            freq_str = "1" + freq_str
         # Create Hypnogram instance for plotting
         hyp = Hypnogram(hypno_int_to_str(hyp), freq=freq_str)
 
@@ -194,15 +197,18 @@ def plot_spectrogram(
         Single-channel EEG data. Must be a 1D NumPy array.
     sf : float
         The sampling frequency of data AND the hypnogram.
-    hypno : array_like
+    hypno : array_like or :py:class:`yasa.Hypnogram`
         Sleep stage (hypnogram), optional.
 
-        The hypnogram must have the exact same number of samples as ``data``.
-        To upsample your hypnogram, please refer to :py:func:`yasa.hypno_upsample_to_data`.
+        Can be an upsampled integer array (same number of samples as ``data``) or a
+        :py:class:`yasa.Hypnogram` instance (automatically upsampled). When a
+        :py:class:`yasa.Hypnogram` is passed, the hypnogram is used directly for plotting.
+
+        To manually upsample an integer array, use :py:meth:`yasa.Hypnogram.upsample_to_data` or
+        :py:func:`yasa.hypno_upsample_to_data`.
 
         .. note::
-            The default hypnogram format in YASA is a 1D integer
-            vector where:
+            When passing an integer array, hypnogram values follow this mapping:
 
             - -2 = Unscored
             - -1 = Artefact / Movement
@@ -245,38 +251,53 @@ def plot_spectrogram(
 
         >>> import yasa
         >>> import numpy as np
-        >>> # In the next 5 lines, we're loading the data from GitHub.
-        >>> import requests
-        >>> from io import BytesIO
-        >>> r = requests.get('https://github.com/raphaelvallat/yasa/raw/master/notebooks/data_full_6hrs_100Hz_Cz%2BFz%2BPz.npz', stream=True)
-        >>> npz = np.load(BytesIO(r.raw.read()))
-        >>> data = npz.get('data')[0, :]
+        >>> fpath = yasa.fetch_sample("full_6hrs_100Hz_Cz+Fz+Pz.npz")
+        >>> npz = np.load(fpath)
+        >>> data = npz["data"][0, :]
         >>> sf = 100
         >>> fig = yasa.plot_spectrogram(data, sf)
 
-    2. Full-night multitaper spectrogram on Cz with the hypnogram on top
+    2. Full-night multitaper spectrogram on Cz with the hypnogram on top (legacy integer array)
 
     .. plot::
 
         >>> import yasa
         >>> import numpy as np
-        >>> # In the next lines, we're loading the data from GitHub.
-        >>> import requests
-        >>> from io import BytesIO
-        >>> r = requests.get('https://github.com/raphaelvallat/yasa/raw/master/notebooks/data_full_6hrs_100Hz_Cz%2BFz%2BPz.npz', stream=True)
-        >>> npz = np.load(BytesIO(r.raw.read()))
-        >>> data = npz.get('data')[0, :]
+        >>> fpath = yasa.fetch_sample("full_6hrs_100Hz_Cz+Fz+Pz.npz")
+        >>> npz = np.load(fpath)
+        >>> data = npz["data"][0, :]
         >>> sf = 100
-        >>> # Load the 30-sec hypnogram and upsample to data
-        >>> hypno = np.loadtxt('https://raw.githubusercontent.com/raphaelvallat/yasa/master/notebooks/data_full_6hrs_100Hz_hypno_30s.txt')
-        >>> hypno = yasa.hypno_upsample_to_data(hypno, 1/30, data, sf)
-        >>> fig = yasa.plot_spectrogram(data, sf, hypno, cmap='Spectral_r')
+        >>> hypno = np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt"))
+        >>> hypno = yasa.hypno_upsample_to_data(hypno, 1 / 30, data, sf)
+        >>> fig = yasa.plot_spectrogram(data, sf, hypno, cmap="Spectral_r")
+
+    3. Same plot using a :py:class:`~yasa.Hypnogram` directly — no upsampling needed:
+
+    .. plot::
+
+        >>> import yasa
+        >>> import numpy as np
+        >>> fpath = yasa.fetch_sample("full_6hrs_100Hz_Cz+Fz+Pz.npz")
+        >>> npz = np.load(fpath)
+        >>> data = npz["data"][0, :]
+        >>> sf = 100
+        >>> hypno_30s = yasa.hypno_int_to_str(
+        ...     np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt")).astype(int)
+        ... )
+        >>> hyp = yasa.Hypnogram(hypno_30s, freq="30s")
+        >>> fig = yasa.plot_spectrogram(data, sf, hyp, cmap="Spectral_r")
     """
-    from yasa.hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
+    from .hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
 
     # Increase font size while preserving original
     old_fontsize = plt.rcParams["font.size"]
     plt.rcParams.update({"font.size": 18})
+
+    # If hypno is a Hypnogram instance, upsample it and keep the original for plotting
+    hyp_obj = None
+    if isinstance(hypno, Hypnogram):
+        hyp_obj = hypno  # Use directly for plotting
+        hypno = hypno.upsample_to_data(data, sf=sf)
 
     # Safety checks
     assert isinstance(data, np.ndarray), "`data` must be a 1D NumPy array."
@@ -330,14 +351,18 @@ def plot_spectrogram(
     ax1.set_xlabel("Time [hrs]")
 
     if hypno is not None:
-        # Convert sampling frequency to pandas timefrequency string (e.g., "30s")
-        freq_str = pd.tseries.frequencies.to_offset(pd.Timedelta(1 / sf, "s")).freqstr
-        # Create Hypnogram instance for plotting
-        hyp = Hypnogram(hypno_int_to_str(hypno), freq=freq_str)
+        if hyp_obj is None:
+            # Convert sampling frequency to pandas timefrequency string (e.g., "30s")
+            freq_str = pd.tseries.frequencies.to_offset(pd.Timedelta(1 / sf, "s")).freqstr
+            # Prepend "1" if freqstr has no numeric prefix (e.g. "s" -> "1s" when sf=1)
+            if not freq_str[0].isdigit():
+                freq_str = "1" + freq_str
+            # Create Hypnogram instance for plotting
+            hyp_obj = Hypnogram(hypno_int_to_str(hypno), freq=freq_str)
         hypnoplot_kwargs = dict(lw=1.5, fill_color=None)
         hypnoplot_kwargs.update(kwargs)
         # Draw hypnogram
-        ax0 = hyp.plot_hypnogram(ax=ax0, **hypnoplot_kwargs)
+        ax0 = hyp_obj.plot_hypnogram(ax=ax0, **hypnoplot_kwargs)
         ax0.xaxis.set_visible(False)
     else:
         # Add colorbar
@@ -423,10 +448,12 @@ def topoplot(
 
         >>> import yasa
         >>> import pandas as pd
-        >>> data = pd.Series([4, 8, 7, 1, 2, 3, 5],
-        ...                  index=['F4', 'F3', 'C4', 'C3', 'P3', 'P4', 'Oz'],
-        ...                  name='Values')
-        >>> fig = yasa.topoplot(data, title='My first topoplot')
+        >>> data = pd.Series(
+        ...     [4, 8, 7, 1, 2, 3, 5],
+        ...     index=["F4", "F3", "C4", "C3", "P3", "P4", "Oz"],
+        ...     name="Values",
+        ... )
+        >>> fig = yasa.topoplot(data, title="My first topoplot")
 
     2. Plot correlation coefficients (values ranging from -1 to 1)
 
@@ -434,10 +461,11 @@ def topoplot(
 
         >>> import yasa
         >>> import pandas as pd
-        >>> data = pd.Series([-0.5, -0.7, -0.3, 0.1, 0.15, 0.3, 0.55],
-        ...                  index=['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz'])
-        >>> fig = yasa.topoplot(data, vmin=-1, vmax=1, n_colors=8,
-        ...                     cbar_title="Pearson correlation")
+        >>> data = pd.Series(
+        ...     [-0.5, -0.7, -0.3, 0.1, 0.15, 0.3, 0.55],
+        ...     index=["F3", "Fz", "F4", "C3", "Cz", "C4", "Pz"],
+        ... )
+        >>> fig = yasa.topoplot(data, vmin=-1, vmax=1, n_colors=8, cbar_title="Pearson correlation")
     """
     # Increase font size while preserving original
     old_fontsize = plt.rcParams["font.size"]

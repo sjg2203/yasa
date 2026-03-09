@@ -10,7 +10,7 @@ import pytest
 from scipy.signal import welch
 
 from yasa.fetchers import fetch_sample
-from yasa.hypno import hypno_str_to_int, hypno_upsample_to_data
+from yasa.hypno import Hypnogram, hypno_int_to_str, hypno_str_to_int, hypno_upsample_to_data
 from yasa.plotting import plot_spectrogram
 from yasa.spectral import (
     bandpower,
@@ -43,6 +43,10 @@ hypno_mne = np.loadtxt(hypno_mne_fp, dtype=str)
 hypno_mne = hypno_str_to_int(hypno_mne)
 hypno_mne = hypno_upsample_to_data(hypno=hypno_mne, sf_hypno=(1 / 30), data=data_mne)
 
+# Hypnogram objects for testing Hypnogram-based hypno support
+hypno_full_30s = hypno_full[:: int(sf_full * 30)]  # 1 value per 30s epoch
+hyp_full = Hypnogram(hypno_int_to_str(hypno_full_30s), freq="30s")
+
 # Eyes-open 6 minutes resting-state, 2 channels, 200 Hz
 raw_eo_fp = fetch_sample("resting_EO_200Hz_raw.fif")
 raw_eo = mne.io.read_raw_fif(raw_eo_fp, verbose=0)
@@ -65,6 +69,17 @@ class TestSpectral(unittest.TestCase):
             data_full, sf=sf_full, hypno=hypno_full, include=(3, 4, 5), bandpass=True
         )  # Multi channel numpy
         bandpower(data_mne, hypno=hypno_mne, include=2)  # Raw MNE with hypno
+
+        # Test with Hypnogram instance + integer include
+        bp_hyp_int = bandpower(
+            data_full, sf=sf_full, ch_names=chan_full, hypno=hyp_full, include=(2, 3)
+        )
+        # Test with Hypnogram instance + string include
+        bp_hyp_str = bandpower(
+            data_full, sf=sf_full, ch_names=chan_full, hypno=hyp_full, include=["N2", "N3"]
+        )
+        # Both should give the same result
+        np.testing.assert_array_almost_equal(bp_hyp_int.values, bp_hyp_str.values)
 
         # BANDPOWER_FROM_PSD
         # 1-D EEG data
@@ -160,21 +175,25 @@ class TestSpectral(unittest.TestCase):
 
     def test_plot_spectrogram(self):
         """Test function plot_spectrogram"""
-        plot_spectrogram(data_full[0, :], sf_full, fmin=0.5, fmax=30)
-        plot_spectrogram(data_full[0, :], sf_full, hypno_full, trimperc=5)
-        plot_spectrogram(data_full[0, :], sf_full, fmin=0.5, fmax=30, vmin=-50, vmax=100)
-        hypno_full_art = np.copy(hypno_full)
-        hypno_full_art[hypno_full_art == 3.0] = -1
-        # Replace N3 by Artefact
-        plot_spectrogram(data_full[0, :], sf_full, hypno_full_art, trimperc=5)
-        # Now replace REM by Unscored
-        hypno_full_art[hypno_full_art == 4.0] = -2
-        plot_spectrogram(data_full[0, :], sf_full, hypno_full_art)
-        # Pass kwargs to the hypnogram plot
-        plot_spectrogram(data_full[0, :], sf_full, hypno_full_art, lw=1, fill_color="blue")
+        # Use 2 hours of data to keep the test fast (spectrogram is O(n))
+        n = int(2 * 3600 * sf_full)
+        data_s = data_full[0, :n]
+        hypno_s = hypno_full[:n]
+        hypno_s_art = np.copy(hypno_s)
+        hypno_s_art[hypno_s_art == 3.0] = -1  # Replace N3 by Artefact
+        hypno_s_art[hypno_s_art == 4.0] = -2  # Replace REM by Unscored
+        hyp_s = Hypnogram(hypno_int_to_str(hypno_s[:: int(sf_full * 30)]), freq="30s")
+        # No hypnogram, with fmin/fmax and vmin/vmax
+        plot_spectrogram(data_s, sf_full, fmin=0.5, fmax=30, vmin=-50, vmax=100)
+        # Integer hypnogram array with trimperc
+        plot_spectrogram(data_s, sf_full, hypno_s, trimperc=5)
+        # With artefact (-1) and unscored (-2) stages
+        plot_spectrogram(data_s, sf_full, hypno_s_art, trimperc=5)
+        # Hypnogram object (auto-upsampled) with kwargs
+        plot_spectrogram(data_s, sf_full, hyp_s, lw=1, fill_color="whitesmoke")
         plt.close("all")
-        # Errors
+        # Errors: vmin and vmax must be both provided or neither
         with pytest.raises(AssertionError):
-            plot_spectrogram(data_full[0, :], sf_full, fmin=0.5, fmax=30, vmin=-50)
+            plot_spectrogram(data_s, sf_full, fmin=0.5, fmax=30, vmin=-50)
         with pytest.raises(AssertionError):
-            plot_spectrogram(data_full[0, :], sf_full, fmin=0.5, fmax=30, vmax=100)
+            plot_spectrogram(data_s, sf_full, fmin=0.5, fmax=30, vmax=100)

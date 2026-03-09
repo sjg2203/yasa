@@ -33,20 +33,10 @@ Hypnogram & sleep statistics
     :toctree: generated/
     :nosignatures:
 
-    hypno_upsample_to_data
-    hypno_upsample_to_sf
-    hypno_str_to_int
-    hypno_int_to_str
-    hypno_find_periods
-    load_profusion_hypno
-    plot_hypnogram
-    plot_spectrogram
-    transition_matrix
-    sleep_statistics
     Hypnogram
-    simulate_hypnogram
     EpochByEpochAgreement
     SleepStatsAgreement
+    simulate_hypnogram
 
 Spectral analyses
 -----------------
@@ -77,3 +67,14 @@ Heart rate analysis
     :nosignatures:
 
     hrv_stage
+
+Utilities
+---------
+
+.. _utils:
+
+.. autosummary::
+    :toctree: generated/
+    :nosignatures:
+
+    fetch_sample

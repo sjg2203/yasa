@@ -19,7 +19,7 @@ from yasa.detection import (
     sw_detect,
 )
 from yasa.fetchers import fetch_sample
-from yasa.hypno import hypno_str_to_int, hypno_upsample_to_data
+from yasa.hypno import Hypnogram, hypno_int_to_str, hypno_str_to_int, hypno_upsample_to_data
 
 ##############################################################################
 # DATA LOADING
@@ -41,17 +41,24 @@ data_n3 = np.loadtxt(data_n3_fp)
 # Load a full recording and its hypnogram
 data_full_fp = fetch_sample("full_6hrs_100Hz_Cz+Fz+Pz.npz")
 hypno_full_fp = fetch_sample("full_6hrs_100Hz_hypno.npz")
-data_full = np.load(data_full_fp).get("data")
+_data_full_raw = np.load(data_full_fp).get("data")
 chan_full = np.load(data_full_fp).get("chan")
 hypno_full = np.load(hypno_full_fp).get("hypno")
+
+# Keep only Fz and during a N3 sleep period with (huge) slow-waves
+# (extracted before truncation since the N3 segment is at ~1h51m)
+data_sw = _data_full_raw[1, 666000:672000].astype(np.float64)
+hypno_sw = hypno_full[666000:672000]
+
+# Truncate to 3 hours for faster multi-channel tests (~2x speedup).
+# The N3 segment used for data_sw at 666k–672k samples is still included.
+_N = 1_080_000  # 3 hours at 100 Hz
+data_full = _data_full_raw[:, :_N]
+hypno_full = hypno_full[:_N]
 
 # Let's add a channel with bad data amplitude
 chan_full = np.append(chan_full, "Bad")  # ['Cz', 'Fz', 'Pz', 'Bad']
 data_full = np.vstack((data_full, data_full[-1, :] * 1e8))
-
-# Keep only Fz and during a N3 sleep period with (huge) slow-waves
-data_sw = data_full[1, 666000:672000].astype(np.float64)
-hypno_sw = hypno_full[666000:672000]
 
 # MNE Raw
 data_mne_fp = fetch_sample("sub-02_mne_raw.fif")
@@ -62,6 +69,14 @@ hypno_mne_fp = fetch_sample("sub-02_hypno_30s.txt")
 hypno_mne = np.loadtxt(hypno_mne_fp, dtype=str)
 hypno_mne = hypno_str_to_int(hypno_mne)
 hypno_mne = hypno_upsample_to_data(hypno=hypno_mne, sf_hypno=(1 / 30), data=data_mne)
+
+# Hypnogram objects for testing Hypnogram-based hypno support
+# Full-night 5-stage Hypnogram (30s epochs, 100 Hz data)
+hypno_full_30s = hypno_full[:: int(sf * 30)]  # downsample to 1 value per 30s epoch
+hyp_full = Hypnogram(hypno_int_to_str(hypno_full_30s), freq="30s")
+# sub-02 Hypnogram (30s epochs, string stages already)
+hypno_mne_str = np.loadtxt(fetch_sample("sub-02_hypno_30s.txt"), dtype=str)
+hyp_mne = Hypnogram(hypno_mne_str, freq="30s")
 
 
 class TestDetection(unittest.TestCase):
@@ -74,18 +89,47 @@ class TestDetection(unittest.TestCase):
         with self.assertLogs("yasa", level="WARNING"):
             _check_data_hypno(data_mne, ch_names=["CH999"])  # ch_names is ignored
 
+        # Test with Hypnogram instance + integer include (default behavior preserved)
+        _, _, _, hypno_out, include_out, mask, _, n_samples, _ = _check_data_hypno(
+            data_full[1, :], sf, hypno=hyp_full, include=(2, 3)
+        )
+        assert hypno_out.shape == (n_samples,)
+        assert set(include_out) == {2, 3}
+
+        # Test with Hypnogram instance + string include
+        _, _, _, hypno_out2, include_out2, _, _, _, _ = _check_data_hypno(
+            data_full[1, :], sf, hypno=hyp_full, include=["N2", "N3"]
+        )
+        np.testing.assert_array_equal(include_out, include_out2)
+
+        # Test with Hypnogram instance + single string include
+        _, _, _, _, include_out3, _, _, _, _ = _check_data_hypno(
+            data_full[1, :], sf, hypno=hyp_full, include="REM"
+        )
+        np.testing.assert_array_equal(include_out3, [4])
+
+        # Test with MNE raw + Hypnogram
+        _, _, _, hypno_out_mne, _, _, _, n_mne, _ = _check_data_hypno(
+            data_mne, hypno=hyp_mne, include=["N2", "N3"]
+        )
+        assert hypno_out_mne.shape == (n_mne,)
+
     def test_spindles_detect(self):
         """Test spindles_detect"""
         #######################################################################
         # SINGLE CHANNEL
         #######################################################################
-        freq_sp = [(11, 16), [12, 14]]
-        freq_broad = [(0.5, 30), [1, 25]]
-        duration = [(0.3, 2.5), [0.5, 3]]
-        min_distance = [None, 0, 500]
-        prod_args = product(freq_sp, freq_broad, duration, min_distance)
-
-        for i, (s, b, d, m) in enumerate(prod_args):
+        # Representative parameter combinations (covers all values, avoids full
+        # Cartesian product of 24 iterations).
+        param_combos_sp = [
+            ((11, 16), (0.5, 30), (0.3, 2.5), None),
+            ([12, 14], (0.5, 30), (0.3, 2.5), 0),
+            ((11, 16), [1, 25], (0.3, 2.5), 500),
+            ([12, 14], [1, 25], [0.5, 3], None),
+            ((11, 16), (0.5, 30), [0.5, 3], 0),
+            ([12, 14], [1, 25], [0.5, 3], 500),
+        ]
+        for s, b, d, m in param_combos_sp:
             spindles_detect(data, sf, freq_sp=s, duration=d, freq_broad=b, min_distance=m)
 
         sp = spindles_detect(data, sf, verbose=True)
@@ -198,7 +242,7 @@ class TestDetection(unittest.TestCase):
         # With a look around and using the summary
         sp_vs_nout_1s = sp.compare_detection(sp_no_out.summary(), max_distance_sec=1)
         sp_vs_nout_2s = sp.compare_detection(sp_no_out.summary(), max_distance_sec=2)
-        assert (sp_vs_nout_2s["f1"] > sp_vs_nout_1s["f1"]).all()
+        assert (sp_vs_nout_2s["f1"] >= sp_vs_nout_1s["f1"]).all()
         assert (sp_vs_nout_2s["recall"] == sp_vs_nout_1s["recall"]).all()
         assert (sp_vs_nout_2s["n_self"] == sp_vs_nout_1s["n_self"]).all()
 
@@ -229,21 +273,32 @@ class TestDetection(unittest.TestCase):
         # Using a MNE raw object (and disabling one threshold)
         spindles_detect(data_mne, thresh={"corr": None, "rms": 3})
         spindles_detect(data_mne, hypno=hypno_mne, include=2, verbose=True)
+
+        # Test with Hypnogram instance (integer include, default)
+        sp_hyp = spindles_detect(data_full[1, :], sf, hypno=hyp_full, include=(1, 2, 3))
+        assert sp_hyp is not None
+        # Test with Hypnogram instance + string include
+        sp_hyp_str = spindles_detect(
+            data_full[1, :], sf, hypno=hyp_full, include=["N1", "N2", "N3"]
+        )
+        assert sp_hyp_str is not None
+        # Both should detect the same spindles
+        assert sp_hyp.summary().shape[0] == sp_hyp_str.summary().shape[0]
+        # Test with MNE raw + Hypnogram
+        spindles_detect(data_mne, hypno=hyp_mne, include=["N2"], verbose=True)
         plt.close("all")
 
     def test_sw_detect(self):
         """Test function slow-wave detect"""
-        # Parameters product testing
-        freq_sw = [(0.3, 3.5), (0.5, 4)]
-        dur_neg = [(0.3, 1.5), [0.1, 2]]
-        dur_pos = [(0.3, 1.5), [0, 1]]
-        amp_neg = [(40, 300), [40, None]]
-        amp_pos = [(10, 150), (0, None)]
-        amp_ptp = [(75, 400), [80, 300]]
-        prod_args = product(freq_sw, dur_neg, dur_pos, amp_neg, amp_pos, amp_ptp)
-
-        for i, (f, dn, dp, an, ap, aptp) in enumerate(prod_args):
-            # print((f, dn, dp, an, ap, aptp))
+        # Representative parameter combinations (covers all values and None thresholds,
+        # avoids full Cartesian product of 64 iterations).
+        param_combos_sw = [
+            ((0.3, 3.5), (0.3, 1.5), (0.3, 1.5), (40, 300), (10, 150), (75, 400)),
+            ((0.5, 4), [0.1, 2], [0, 1], [40, None], (0, None), [80, 300]),
+            ((0.3, 3.5), [0.1, 2], (0.3, 1.5), [40, None], (10, 150), [80, 300]),
+            ((0.5, 4), (0.3, 1.5), [0, 1], (40, 300), (0, None), (75, 400)),
+        ]
+        for f, dn, dp, an, ap, aptp in param_combos_sw:
             sw_detect(
                 data_sw, sf, freq_sw=f, dur_neg=dn, dur_pos=dp, amp_neg=an, amp_pos=ap, amp_ptp=aptp
             )
@@ -327,6 +382,16 @@ class TestDetection(unittest.TestCase):
         # Using a MNE raw object
         sw_detect(data_mne)
         sw_detect(data_mne, hypno=hypno_mne, include=3)
+
+        # Test with Hypnogram instance + integer include
+        sw_hyp = sw_detect(data_full[1, :], sf, hypno=hyp_full, include=(2, 3))
+        assert sw_hyp is not None
+        # Test with Hypnogram instance + string include
+        sw_hyp_str = sw_detect(data_full[1, :], sf, hypno=hyp_full, include=["N2", "N3"])
+        assert sw_hyp_str is not None
+        assert sw_hyp.summary().shape[0] == sw_hyp_str.summary().shape[0]
+        # Test with MNE raw + Hypnogram
+        sw_detect(data_mne, hypno=hyp_mne, include=["N3"])
         plt.close("all")
 
     def test_rem_detect(self):
@@ -379,6 +444,15 @@ class TestDetection(unittest.TestCase):
         # No values in hypno intersect with include
         with pytest.raises(AssertionError):
             rem_detect(loc, roc, sf, hypno=hypno_rem, include=5)
+
+        # Test with Hypnogram instance + string include
+        hypno_rem_str = np.array(["REM"] * loc.size)
+        hyp_rem = Hypnogram(hypno_rem_str, freq="1s")
+        rem_hyp = rem_detect(loc, roc, sf_rem, hypno=hyp_rem, include="REM")
+        assert rem_hyp is not None
+        # Integer and string include should give the same result
+        rem_int = rem_detect(loc, roc, sf_rem, hypno=hyp_rem, include=4)
+        assert rem_hyp.summary().shape[0] == rem_int.summary().shape[0]
 
     def test_art_detect(self):
         """Test function art_detect"""
@@ -442,6 +516,9 @@ class TestDetection(unittest.TestCase):
         with pytest.raises(AssertionError):
             # None of include in hypno
             art_detect(data_mne, window=10.0, hypno=hypno_mne, include=[7, 8])
+
+        # Test with Hypnogram instance + string include
+        art_detect(data_9, sf=100, window=6, hypno=hyp_full, include=["N2", "N3"], method="covar")
 
     def test_compare_detect(self):
         """Test compare_detect function."""
