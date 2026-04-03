@@ -22,7 +22,6 @@ from scipy.stats import circmean
 from sklearn.ensemble import IsolationForest
 
 from .io import is_pyriemann_installed, set_log_level
-from .numba import _detrend, _rms
 from .others import (
     _index_to_events,
     _merge_close,
@@ -873,23 +872,20 @@ def spindles_detect(
         if bad_chan[i]:
             continue
 
-        # Compute the pointwise relative power using interpolated STFT
-        # Here we use a step of 200 ms to speed up the computation.
-        # Note that even if the threshold is None we still need to calculate it
-        # for the individual spindles parameter (RelPow).
-        f, t, Sxx = stft_power(
+        # Compute the relative sigma power using the STFT (step=200 ms, no interp).
+        # rel_pow_coarse holds one value per STFT frame and is used directly for
+        # per-spindle RelPow extraction, avoiding a full-resolution interpolation.
+        f, t_stft, Sxx = stft_power(
             data_broad[i, :], sf, window=2, step=0.2, band=freq_broad, interp=False, norm=True
         )
         idx_sigma = np.logical_and(f >= freq_sp[0], f <= freq_sp[1])
-        rel_pow = Sxx[idx_sigma].sum(0)
+        rel_pow_coarse = Sxx[idx_sigma].sum(0)
 
-        # Let's interpolate `rel_pow` to get one value per sample
-        # Note that we could also have use the `interp=True` in the
-        # `stft_power` function, however 2D interpolation is much slower than
-        # 1D interpolation.
-        func = interp1d(t, rel_pow, kind="cubic", bounds_error=False, fill_value=0)
-        t = np.arange(n_samples) / sf
-        rel_pow = func(t)
+        # Full-resolution interpolation is only needed when rel_pow is used as a
+        # detection threshold.  Linear interpolation is fast and sufficient here.
+        if do_rel_pow:
+            func = interp1d(t_stft, rel_pow_coarse, kind="linear", bounds_error=False, fill_value=0)
+            rel_pow = func(np.arange(n_samples) / sf)
 
         if do_corr:
             _, mcorr = moving_transform(
@@ -989,13 +985,32 @@ def spindles_detect(
 
         for j in np.arange(len(sp))[good_dur]:
             # Important: detrend the signal to avoid wrong PTP amplitude
-            sp_x = np.arange(data_broad[i, sp[j]].size, dtype=np.float64)
-            sp_det = _detrend(sp_x, data_broad[i, sp[j]])
-            # sp_det = signal.detrend(data_broad[i, sp[i]], type='linear')
+            sp_det = signal.detrend(data_broad[i, sp[j]], type="linear")
             sp_amp[j] = np.ptp(sp_det)  # Peak-to-peak amplitude
             sp_amp_filt[j] = np.ptp(data_sigma[i, sp[j]])  # Amplitude on sigma-filtered signal
-            sp_rms[j] = _rms(sp_det)  # Root mean square
-            sp_rel[j] = np.median(rel_pow[sp[j]])  # Median relative power
+            sp_rms[j] = np.sqrt(np.mean(sp_det**2))  # Root mean square
+            # Median relative power from the coarse STFT grid (avoids
+            # indexing a full-resolution interpolated array).
+            sp_t_start = sp[j][0] / sf
+            sp_t_end = sp[j][-1] / sf
+            idx_start = np.searchsorted(t_stft, sp_t_start, side="left")
+            idx_end = np.searchsorted(t_stft, sp_t_end, side="right")
+            if idx_start < idx_end:
+                # At least one STFT frame falls within the spindle
+                sp_rel[j] = np.median(rel_pow_coarse[idx_start:idx_end])
+            else:
+                # Spindle shorter than one STFT step: use the nearest frame
+                sp_mid = 0.5 * (sp_t_start + sp_t_end)
+                idx = np.searchsorted(t_stft, sp_mid, side="left")
+                if idx == 0:
+                    nearest_idx = 0
+                elif idx >= t_stft.size:
+                    nearest_idx = t_stft.size - 1
+                elif abs(t_stft[idx] - sp_mid) < abs(t_stft[idx - 1] - sp_mid):
+                    nearest_idx = idx
+                else:
+                    nearest_idx = idx - 1
+                sp_rel[j] = rel_pow_coarse[nearest_idx]
 
             # Hilbert-based instantaneous properties
             sp_inst_freq = inst_freq[i, sp[j]]
@@ -1692,11 +1707,10 @@ def sw_detect(
         return None
 
     # Define time vector
-    times = np.arange(data.size) / sf
+    times = np.arange(n_samples) / sf
     idx_mask = np.where(mask)[0]
 
     # Bandpass filter
-    nfast = next_fast_len(n_samples)
     data_filt = filter_data(
         data,
         sf,
@@ -1732,11 +1746,12 @@ def sw_detect(
             verbose=0,
         )
         # Now extract the instantaneous phase/amplitude using Hilbert transform
+        nfast = next_fast_len(n_samples)
         sw_pha = np.angle(signal.hilbert(data_filt, N=nfast)[:, :n_samples])
         sp_amp = np.abs(signal.hilbert(data_sp, N=nfast)[:, :n_samples])
 
-    # Initialize empty output dataframe
-    df = pd.DataFrame()
+    # Collect per-channel DataFrames, then concat once at the end
+    dfs = []
 
     for i in range(n_chan):
         # ####################################################################
@@ -1777,7 +1792,7 @@ def sw_detect(
         good_ptp = np.logical_and(sw_ptp > amp_ptp[0], sw_ptp < amp_ptp[1])
 
         # If good_ptp is all False
-        if all(~good_ptp):
+        if not good_ptp.any():
             logger.warning("No SW were found in channel %s.", ch_names[i])
             continue
 
@@ -1846,11 +1861,12 @@ def sw_detect(
                 # Sanity checks
                 sw_midcrossing > sw_start,
                 sw_midcrossing < sw_end,
+                np.isfinite(sw_slope),
                 sw_slope > 0,
             )
         )
 
-        if all(~good_sw):
+        if not good_sw.any():
             logger.warning("No SW were found in channel %s.", ch_names[i])
             continue
 
@@ -1957,9 +1973,14 @@ def sw_detect(
 
         df_chan["Channel"] = ch_names[i]
         df_chan["IdxChannel"] = i
-        df = pd.concat([df, df_chan], axis=0, ignore_index=True)
+        dfs.append(df_chan)
 
     # If no SW were detected, return None
+    if not dfs:
+        df = pd.DataFrame()
+    else:
+        df = pd.concat(dfs, axis=0, ignore_index=True)
+
     if df.empty:
         logger.warning("No SW were found in data. Returning None.")
         return None
