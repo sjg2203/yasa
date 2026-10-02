@@ -2,16 +2,11 @@
 This file contains several helper functions to manipulate 1D and 2D EEG data.
 """
 
-import logging
-
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 from scipy.interpolate import interp1d
-from scipy.special import erfinv
 
-logger = logging.getLogger("yasa")
-
-__all__ = ["moving_transform", "trimbothstd", "sliding_window", "get_centered_indices"]
+__all__ = ["moving_transform", "sliding_window"]
 
 
 def _merge_close(index, min_distance_ms, sf):
@@ -78,7 +73,7 @@ def _index_to_events(x):
     return index
 
 
-def moving_transform(x, y=None, sf=100, window=0.3, step=0.1, method="corr", interp=False):
+def moving_transform(x, y=None, sf=None, window=0.3, step=0.1, method="corr", interp=False):
     """Moving transformation of one or two time-series.
 
     Parameters
@@ -88,7 +83,10 @@ def moving_transform(x, y=None, sf=100, window=0.3, step=0.1, method="corr", int
     y : array_like, optional
         Second single-channel data (only used if method in ['corr', 'covar']).
     sf : float
-        Sampling frequency.
+        Sampling frequency, in Hz.
+
+        .. versionchanged:: 0.8.0
+            ``sf`` is now required. Previously, it silently defaulted to 100 Hz.
     window : int
         Window size in seconds.
     step : int
@@ -127,6 +125,8 @@ def moving_transform(x, y=None, sf=100, window=0.3, step=0.1, method="corr", int
     Wonambi package (https://github.com/wonambi-python/wonambi).
     """
     # Safety checks
+    if sf is None:
+        raise TypeError("moving_transform() missing required argument: 'sf'")
     assert method in [
         "mean",
         "min",
@@ -296,10 +296,10 @@ def _zerocrossings(x):
     Examples
     --------
     >>> import numpy as np
-    >>> from yasa.main import _zerocrossings
+    >>> from yasa.others import _zerocrossings
     >>> a = np.array([4, 2, -1, -3, 1, 2, 3, -2, -5])
     >>> _zerocrossings(a)
-        array([1, 3, 6], dtype=int64)
+    array([1, 3, 6])
     """
     pos = x > 0
     npos = ~pos
@@ -391,7 +391,7 @@ def sliding_window(data, sf, window, step=None, axis=-1):
            [10, 11, 12, 13, 14],
            [15, 16, 17, 18, 19]])
 
-    >>> sliding_window(data, sf=1, window=5, step=1)[1]
+    >>> sliding_window(data, sf=1, window=5, step=2)[1]
     array([[ 0,  1,  2,  3,  4],
            [ 2,  3,  4,  5,  6],
            [ 4,  5,  6,  7,  8],
@@ -423,14 +423,15 @@ def sliding_window(data, sf, window, step=None, axis=-1):
             [-83,  31, -12, -41, -87, -92, -11, -48,  29, -17],
             [-51,   3,  31, -99,  33, -47,   5, -97, -47,  90]]])
     """
-    assert axis <= data.ndim, "Axis value out of range."
+    assert isinstance(axis, int), "axis must be int."
+    assert -data.ndim <= axis < data.ndim, "Axis value out of range."
+    axis = axis % data.ndim
     assert isinstance(sf, (int, float)), "sf must be int or float"
     assert isinstance(window, (int, float)), "window must be int or float"
     assert isinstance(step, (int, float, type(None))), "step must be int, float or None."
     if isinstance(sf, float):
         assert sf.is_integer(), "sf must be a whole number."
         sf = int(sf)
-    assert isinstance(axis, int), "axis must be int."
 
     # window and step in samples instead of points
     window *= sf
@@ -445,7 +446,7 @@ def sliding_window(data, sf, window, step=None, axis=-1):
         step = int(step)
 
     assert step >= 1, "Stepsize may not be zero or negative."
-    assert window < data.shape[axis], "Sliding window size may not exceed size of selected axis"
+    assert window <= data.shape[axis], "Sliding window size may not exceed size of selected axis"
 
     # Define output shape
     shape = list(data.shape)
@@ -457,11 +458,10 @@ def sliding_window(data, sf, window, step=None, axis=-1):
     strides[axis] *= step
     strides.append(data.strides[axis])
     strided = as_strided(data, shape=shape, strides=strides)
-    t = np.arange(strided.shape[-2]) * (step / sf)
+    t = np.arange(strided.shape[axis]) * (step / sf)
 
     # Swap axis: n_epochs, ..., n_samples
-    if strided.ndim > 2:
-        strided = np.rollaxis(strided, -2, 0)
+    strided = np.moveaxis(strided, axis, 0)
     return t, strided
 
 
@@ -491,7 +491,7 @@ def get_centered_indices(data, idx, npts_before, npts_after):
     Examples
     --------
     >>> import numpy as np
-    >>> from yasa import get_centered_indices
+    >>> from yasa.others import get_centered_indices
     >>> np.random.seed(123)
     >>> data = np.random.normal(size=100).round(2)
     >>> idx = [1.0, 10.0, 20.0, 30.0, 50.0, 102]
@@ -510,7 +510,7 @@ def get_centered_indices(data, idx, npts_before, npts_after):
            [ 0.41,  0.98,  2.24, -1.29, -1.04,  1.74]])
 
     >>> idx_nomask
-    array([1, 2, 3, 4], dtype=int64)
+    array([1, 2, 3, 4])
     """
     # Safety check
     assert isinstance(npts_before, (int, float))
@@ -524,47 +524,7 @@ def get_centered_indices(data, idx, npts_before, npts_after):
     assert idx.ndim == 1, "idx must be 1D."
     assert data.ndim == 1, "data must be 1D."
 
-    def rng(x):
-        """Create a range before and after a given value."""
-        return np.arange(x[0] - npts_before, x[0] + npts_after + 1, dtype="int")
-
-    idx_ep = np.apply_along_axis(rng, 1, idx[..., np.newaxis])
-    # We drop the events for which the indices exceed data
-    idx_ep = np.ma.mask_rows(np.ma.masked_outside(idx_ep, 0, data.shape[0]))
-    # Indices of non-masked (valid) epochs in idx
-    idx_ep_nomask = np.unique(idx_ep.nonzero()[0])
-    idx_ep = np.ma.compress_rows(idx_ep)
-    return idx_ep, idx_ep_nomask
-
-
-def _norm_direct_pac(pha, amp, p=0.05):
-    """Normalized direct PAC (ndPAC).
-
-    Re-implementation of tensorpac's ``norm_direct_pac`` (Ozkurt et al. 2012).
-
-    Parameters
-    ----------
-    pha : array_like
-        Phase array of shape (n_pha, ..., n_times).
-    amp : array_like
-        Amplitude array of shape (n_amp, ..., n_times).
-    p : float | .05
-        P-value threshold. Sub-threshold PAC values are set to 0.
-        Use ``p=1`` or ``p=None`` to disable thresholding.
-
-    Returns
-    -------
-    pac : array_like
-        Phase-amplitude coupling array of shape (n_amp, n_pha, ...).
-    """
-    n_times = amp.shape[-1]
-    amp = np.subtract(amp, np.mean(amp, axis=-1, keepdims=True))
-    amp = np.divide(amp, np.std(amp, ddof=1, axis=-1, keepdims=True))
-    pac = np.abs(np.einsum("i...j, k...j->ik...", amp, np.exp(1j * pha)))
-    if p == 1.0 or p is None:
-        return pac / n_times
-    s = pac**2
-    pac /= n_times
-    xlim = n_times * erfinv(1 - p) ** 2
-    pac[s <= 2 * xlim] = 0.0
-    return pac
+    idx_ep = idx[:, None] + np.arange(-npts_before, npts_after + 1, dtype="int")
+    # We drop the events for which the indices exceed data (last valid index is n - 1)
+    is_valid = (idx_ep[:, 0] >= 0) & (idx_ep[:, -1] < data.shape[0])
+    return idx_ep[is_valid], np.flatnonzero(is_valid)

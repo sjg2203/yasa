@@ -2,6 +2,9 @@
 Plotting functions of YASA.
 """
 
+import logging
+import warnings
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import mne
@@ -11,12 +14,20 @@ import seaborn as sns
 from lspopt import spectrogram_lspopt
 from matplotlib.colors import ListedColormap, Normalize
 
+from .hypno import Hypnogram, _hypno_int_to_str
+
 __all__ = ["plot_hypnogram", "plot_spectrogram", "topoplot"]
+
+logger = logging.getLogger("yasa")
 
 
 def plot_hypnogram(hyp, sf_hypno=1 / 30, highlight="REM", fill_color=None, ax=None, **kwargs):
     """
     Plot a hypnogram.
+
+    .. deprecated:: 0.8.0
+        Use :py:meth:`yasa.Hypnogram.plot_hypnogram` instead. This function will be removed in
+        v0.9.
 
     .. versionadded:: 0.6.0
 
@@ -53,37 +64,13 @@ def plot_hypnogram(hyp, sf_hypno=1 / 30, highlight="REM", fill_color=None, ax=No
     -------
     ax : :py:class:`matplotlib.axes.Axes`
         Matplotlib Axes
-
-    Examples
-    --------
-    .. plot::
-
-        >>> from yasa import simulate_hypnogram
-        >>> import matplotlib.pyplot as plt
-        >>> hyp = simulate_hypnogram(tib=300, seed=11)
-        >>> ax = hyp.plot_hypnogram()
-        >>> plt.tight_layout()
-
-    .. plot::
-
-        >>> from yasa import Hypnogram
-        >>> values = 4 * ["W", "N1", "N2", "N3", "REM"] + ["ART", "N2", "REM", "W", "UNS"]
-        >>> hyp = Hypnogram(values, freq="24min").upsample("30s")
-        >>> ax = hyp.plot_hypnogram(lw=2, fill_color="thistle")
-        >>> plt.tight_layout()
-
-    .. plot::
-
-        >>> from yasa import simulate_hypnogram
-        >>> import matplotlib.pyplot as plt
-        >>> fig, axes = plt.subplots(nrows=2, figsize=(6, 4), constrained_layout=True)
-        >>> hyp_a = simulate_hypnogram(n_stages=3, seed=99)
-        >>> hyp_b = simulate_hypnogram(n_stages=3, seed=99, start="2022-01-31 23:30:00")
-        >>> hyp_a.plot_hypnogram(lw=1, fill_color="whitesmoke", highlight=None, ax=axes[0])
-        >>> hyp_b.plot_hypnogram(lw=1, fill_color="whitesmoke", highlight=None, ax=axes[1])
     """
-    from .hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
-
+    warnings.warn(
+        "The `yasa.plot_hypnogram` function is deprecated and will be removed in v0.9. "
+        "Please use the `yasa.Hypnogram.plot_hypnogram` method instead.",
+        FutureWarning,
+        stacklevel=2,
+    )
     if not isinstance(hyp, Hypnogram):
         # Convert sampling frequency to pandas timefrequency string (e.g., "30s")
         freq_str = pd.tseries.frequencies.to_offset(pd.Timedelta(1 / sf_hypno, "s")).freqstr
@@ -91,14 +78,16 @@ def plot_hypnogram(hyp, sf_hypno=1 / 30, highlight="REM", fill_color=None, ax=No
         if not freq_str[0].isdigit():
             freq_str = "1" + freq_str
         # Create Hypnogram instance for plotting
-        hyp = Hypnogram(hypno_int_to_str(hyp), freq=freq_str)
+        hyp = Hypnogram(_hypno_int_to_str(hyp), freq=freq_str)
+    return _plot_hypnogram(hyp, highlight=highlight, fill_color=fill_color, ax=ax, **kwargs)
 
+
+# Larger font, restored on exit (even if an error is raised) without touching the global rcParams
+@plt.rc_context({"font.size": 18})
+def _plot_hypnogram(hyp, highlight="REM", fill_color=None, ax=None, **kwargs):
+    """Plot a :py:class:`yasa.Hypnogram`. See :py:meth:`yasa.Hypnogram.plot_hypnogram`."""
     # Work with a copy of the Hypnogram to not alter the original
     hyp = hyp.copy()
-
-    # Increase font size while preserving original
-    old_fontsize = plt.rcParams["font.size"]
-    plt.rcParams.update({"font.size": 18})
 
     # Open the figure
     if ax is None:
@@ -165,11 +154,10 @@ def plot_hypnogram(hyp, sf_hypno=1 / 30, highlight="REM", fill_color=None, ax=No
     if hyp.start is not None:
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    # Revert font-size
-    plt.rcParams.update({"font.size": old_fontsize})
     return ax
 
 
+@plt.rc_context({"font.size": 18})
 def plot_spectrogram(
     data,
     sf,
@@ -204,8 +192,7 @@ def plot_spectrogram(
         :py:class:`yasa.Hypnogram` instance (automatically upsampled). When a
         :py:class:`yasa.Hypnogram` is passed, the hypnogram is used directly for plotting.
 
-        To manually upsample an integer array, use :py:meth:`yasa.Hypnogram.upsample_to_data` or
-        :py:func:`yasa.hypno_upsample_to_data`.
+        To manually upsample an integer array, use :py:meth:`yasa.Hypnogram.upsample_to_data`.
 
         .. note::
             When passing an integer array, hypnogram values follow this mapping:
@@ -257,7 +244,7 @@ def plot_spectrogram(
         >>> sf = 100
         >>> fig = yasa.plot_spectrogram(data, sf)
 
-    2. Full-night multitaper spectrogram on Cz with the hypnogram on top (legacy integer array)
+    2. Full-night multitaper spectrogram on Cz with the hypnogram on top (upsampled integer array)
 
     .. plot::
 
@@ -267,8 +254,8 @@ def plot_spectrogram(
         >>> npz = np.load(fpath)
         >>> data = npz["data"][0, :]
         >>> sf = 100
-        >>> hypno = np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt"))
-        >>> hypno = yasa.hypno_upsample_to_data(hypno, 1 / 30, data, sf)
+        >>> hypno_30s = np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt")).astype(int)
+        >>> hypno = yasa.Hypnogram.from_integers(hypno_30s, freq="30s").upsample_to_data(data, sf)
         >>> fig = yasa.plot_spectrogram(data, sf, hypno, cmap="Spectral_r")
 
     3. Same plot using a :py:class:`~yasa.Hypnogram` directly — no upsampling needed:
@@ -281,18 +268,10 @@ def plot_spectrogram(
         >>> npz = np.load(fpath)
         >>> data = npz["data"][0, :]
         >>> sf = 100
-        >>> hypno_30s = yasa.hypno_int_to_str(
-        ...     np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt")).astype(int)
-        ... )
-        >>> hyp = yasa.Hypnogram(hypno_30s, freq="30s")
+        >>> hypno_30s = np.loadtxt(yasa.fetch_sample("full_6hrs_100Hz_hypno_30s.txt")).astype(int)
+        >>> hyp = yasa.Hypnogram.from_integers(hypno_30s, freq="30s")
         >>> fig = yasa.plot_spectrogram(data, sf, hyp, cmap="Spectral_r")
     """
-    from .hypno import Hypnogram, hypno_int_to_str  # Avoiding circular imports
-
-    # Increase font size while preserving original
-    old_fontsize = plt.rcParams["font.size"]
-    plt.rcParams.update({"font.size": 18})
-
     # If hypno is a Hypnogram instance, upsample it and keep the original for plotting
     hyp_obj = None
     if isinstance(hypno, Hypnogram):
@@ -321,7 +300,9 @@ def plot_spectrogram(
     nperseg = int(win_sec * sf)
     assert data.size > 2 * nperseg, "`data` length must be at least 2 * `win_sec`."
     f, t, Sxx = spectrogram_lspopt(data, sf, nperseg=nperseg, noverlap=0)
-    Sxx = 10 * np.log10(Sxx)  # Convert uV^2 / Hz --> dB / Hz
+    # Flat data (e.g. disconnected electrode) has zero power, i.e. -inf dB
+    with np.errstate(divide="ignore"):
+        Sxx = 10 * np.log10(Sxx)  # Convert uV^2 / Hz --> dB / Hz
 
     # Select only relevant frequencies (up to 30 Hz)
     good_freqs = np.logical_and(f >= fmin, f <= fmax)
@@ -329,9 +310,21 @@ def plot_spectrogram(
     f = f[good_freqs]
     t /= 3600  # Convert t to hours
 
-    # Normalization
+    is_finite = np.isfinite(Sxx)
+    if not is_finite.any():
+        raise ValueError("`data` has zero power in the selected frequency range (flat signal?).")
+    if not is_finite.all():
+        logger.warning(
+            "%.1f%% of the spectrogram has zero power, which typically indicates flat data "
+            "(e.g. disconnected electrode). These values are excluded from the colormap "
+            "normalization.",
+            100 * (1 - is_finite.mean()),
+        )
+
+    # Normalization. Percentiles are computed on finite values only, because -inf values
+    # would otherwise return a NaN vmin when they exceed ``trimperc`` percent of the data.
     if vmin is None:
-        vmin, vmax = np.percentile(Sxx, [0 + trimperc, 100 - trimperc])
+        vmin, vmax = np.percentile(Sxx[is_finite], [0 + trimperc, 100 - trimperc])
     norm = Normalize(vmin=vmin, vmax=vmax)
 
     # Open figure
@@ -358,7 +351,7 @@ def plot_spectrogram(
             if not freq_str[0].isdigit():
                 freq_str = "1" + freq_str
             # Create Hypnogram instance for plotting
-            hyp_obj = Hypnogram(hypno_int_to_str(hypno), freq=freq_str)
+            hyp_obj = Hypnogram(_hypno_int_to_str(hypno), freq=freq_str)
         hypnoplot_kwargs = dict(lw=1.5, fill_color=None)
         hypnoplot_kwargs.update(kwargs)
         # Draw hypnogram
@@ -368,9 +361,6 @@ def plot_spectrogram(
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax1, shrink=0.95, fraction=0.1, aspect=25)
         cbar.ax.set_ylabel("Log Power (dB / Hz)", rotation=270, labelpad=20)
-
-    # Revert font-size
-    plt.rcParams.update({"font.size": old_fontsize})
     return fig
 
 
@@ -490,15 +480,9 @@ def topoplot(
         ...     name="REM",
         ... )
         >>> fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-        >>> yasa.topoplot(data1, ax=axes[0])
-        >>> yasa.topoplot(data2, ax=axes[1])
+        >>> fig = yasa.topoplot(data1, ax=axes[0])
+        >>> fig = yasa.topoplot(data2, ax=axes[1])
     """
-    # Increase font size while preserving original
-    old_fontsize = plt.rcParams["font.size"]
-    plt.rcParams.update({"font.size": fontsize})
-    plt.rcParams.update({"savefig.bbox": "tight"})
-    plt.rcParams.update({"savefig.transparent": "True"})
-
     # Make sure we don't do any in-place modification
     assert isinstance(data, pd.Series), "`data` must be a Pandas Series"
     data = data.copy()
@@ -507,6 +491,8 @@ def topoplot(
     if mask is not None:
         assert isinstance(mask, pd.Series), "`mask` must be a Pandas Series"
         assert mask.dtype.kind in "bi", "`mask` must be True/False or 0/1."
+        # The name is required to join the mask to ``data`` below
+        mask = mask.rename("mask")
     else:
         mask = pd.Series(1, index=data.index, name="mask")
 
@@ -518,6 +504,10 @@ def topoplot(
 
     # Define electrodes coordinates
     Info = mne.create_info(data.index.tolist(), sfreq=100, ch_types="eeg")
+    # MNE 1.13 renamed "standard_1020" to "colin27_1020" (same positions) and deprecated the old
+    # name, which will be removed in MNE 1.14.
+    if montage == "standard_1020" and "colin27_1020" in mne.channels.get_builtin_montages():
+        montage = "colin27_1020"
     Info.set_montage(montage, match_case=False, on_missing="ignore")
     chan = Info.ch_names
 
@@ -551,8 +541,8 @@ def topoplot(
     if kwargs["names"] == "values":
         kwargs["names"] = data.iloc[:, 0][chan].round(2).to_numpy()
 
-    # Start the plot
-    with sns.axes_style("white"):
+    # Start the plot. The font size is restored on exit, even if an error is raised.
+    with sns.axes_style("white"), plt.rc_context({"font.size": fontsize}):
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
             _ax_provided = False
@@ -589,7 +579,4 @@ def topoplot(
             cax = fig.add_axes([0.95, 0.3, 0.02, 0.5])
             cbar = fig.colorbar(im, cax=cax, ticks=cbar_ticks, fraction=0.5)
         cbar.set_label(cbar_title)
-
-        # Revert font-size
-        plt.rcParams.update({"font.size": old_fontsize})
     return fig

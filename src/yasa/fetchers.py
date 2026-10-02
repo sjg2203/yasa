@@ -82,6 +82,8 @@ def _init_repository(name, version):
         base_url=REGISTRY[name][version]["base_url"],
         registry=REGISTRY[name][version]["registry"],
         env=cache_dir_env_var,
+        # Zenodo sometimes times out, so retry failed downloads (with a 1, 2, 3 sec wait)
+        retry_if_failed=3,
     )
     return repo
 
@@ -108,8 +110,7 @@ def fetch_sample(fname, version="v1", **kwargs):
 
     version : str, optional
         The version string of the dataset to :py:meth:`~pooch.Pooch.fetch`.
-        Setting this to ``latest`` (default) is equivalent to setting to the latest version string.
-        Must be one of the versions available for the YASA samples dataset.
+        Default is ``"v1"``. Must be one of the versions available for the YASA samples dataset.
         See the `Zenodo repo <https://doi.org/10.5281/zenodo.14564284>`_ for available versions.
 
     **kwargs : dict
@@ -131,27 +132,27 @@ def fetch_sample(fname, version="v1", **kwargs):
     True
     >>> # Load the hypnogram
     >>> stages_int = np.loadtxt(fpath, skiprows=1, dtype=int)
-    >>> stages_str = yasa.hypno_int_to_str(stages_int)
-    >>> hyp = yasa.Hypnogram(stages_str)
-    >>> print(hyp.hypno.head(3))
-    Epoch
-    0    WAKE
-    1    WAKE
-    2    WAKE
-    Name: Stage, dtype: category
-    Categories (7, object): ['WAKE', 'N1', 'N2', 'N3', 'REM', 'ART', 'UNS']
+    >>> hyp = yasa.Hypnogram.from_integers(stages_int)
+    >>> hyp.hypno.head(3).tolist()
+    ['WAKE', 'WAKE', 'WAKE']
 
     You can also set the ``YASA_DATA_DIR`` environment variable to a custom location.
 
     >>> import os
-    >>> os.environ["YASA_DATA_DIR"] = "~/Desktop/my_yasa_data"
-    >>> fpath = yasa.fetch_sample("night_young_hypno.csv")
+    >>> os.environ["YASA_DATA_DIR"] = "~/Desktop/my_yasa_data"  # doctest: +SKIP
+    >>> fpath = yasa.fetch_sample("night_young_hypno.csv")  # doctest: +SKIP
     """
     allowed_versions = set(REGISTRY["sample"].keys())
     assert isinstance(fname, str), "`fname` must be a string"
     assert isinstance(version, str), "`version` must be a string"
     assert version in allowed_versions, f"`version` must be one of {allowed_versions}."
     pup = _init_repository("sample", version=version)
+    # Check the filename first, so that a typo is not retried as if it were a network error
+    if fname not in pup.registry:
+        raise ValueError(
+            f"File '{fname}' is not in the YASA samples dataset (version '{version}'). "
+            f"Available files are: {sorted(pup.registry)}."
+        )
     for attempt in range(3):
         try:
             fetched = pup.fetch(fname, **kwargs)

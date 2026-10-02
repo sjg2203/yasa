@@ -1,6 +1,6 @@
-"""Tests for hypnogram upsampling: legacy helpers and Hypnogram.upsample_to_data.
+"""Test hypnogram upsampling: Hypnogram.upsample, Hypnogram.upsample_to_data and the helpers.
 
-Covers all combinations of:
+Hypnogram.upsample_to_data is tested on all combinations of:
   - data type : NumPy array | MNE Raw without meas_date | MNE Raw with meas_date
   - Hypnogram : no start | naive start | tz-aware start (via tz=) | tz-aware datetime
 
@@ -17,24 +17,19 @@ import logging
 
 import mne
 import numpy as np
-import pandas as pd
 import pytest
 
-from yasa.hypno import (
-    Hypnogram,
-    hypno_fit_to_data,
-    hypno_upsample_to_data,
-    hypno_upsample_to_sf,
-)
+import yasa
+from yasa.hypno import Hypnogram, _hypno_fit_to_data, simulate_hypnogram
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+###############################################################################
+# Constants and helpers
+###############################################################################
 
 SF = 100  # EEG sampling frequency (Hz)
 SPE = SF * 30  # samples per 30-second epoch = 3000
 
-# 9-epoch integer array used by the legacy helper tests (same as original test suite)
+# 9-epoch integer array used by the _hypno_fit_to_data tests
 HYPNO_INT = np.array([0, 0, 0, 1, 2, 2, 3, 3, 4])
 
 # 10-epoch string hypnogram used by Hypnogram class tests
@@ -45,10 +40,6 @@ N = len(STAGES)  # 10
 
 # Reference hypnogram start used across timestamp tests
 HYP_START = "2024-01-15 23:00:00"  # naive string, represents local time
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def make_raw(n_epochs, meas_date=None):
@@ -65,99 +56,93 @@ def utc(h, m, s=0):
     return datetime.datetime(2024, 1, 15, h, m, s, tzinfo=datetime.timezone.utc)
 
 
-# ---------------------------------------------------------------------------
-# Legacy helper: hypno_upsample_to_sf
-# ---------------------------------------------------------------------------
+###############################################################################
+# Hypnogram.upsample
+###############################################################################
 
 
-def test_upsample_to_sf_basic():
-    up = hypno_upsample_to_sf(HYPNO_INT, sf_hypno=1 / 30, sf_data=SF)
-    assert up.size == HYPNO_INT.size * SPE
-    # each epoch is repeated exactly SPE times
-    assert up[up == 2].size == (HYPNO_INT == 2).sum() * SPE
+def test_upsample():
+    """Each epoch is repeated, and new_freq must evenly divide the current epoch duration."""
+    hyp = Hypnogram(["W", "N1", "N2"], start="2022-01-01 23:00")
+    up = hyp.upsample("10s")
+    assert up.hypno.tolist() == 3 * ["WAKE"] + 3 * ["N1"] + 3 * ["N2"]
+    assert up.n_epochs == 3 * hyp.n_epochs
+    assert up.hypno.index[0] == hyp.hypno.index[0]
+    assert up.hypno.index[-1] != hyp.hypno.index[-1]
+    assert up.end == hyp.end
+    with pytest.raises(AssertionError):
+        hyp.upsample("20s")
 
 
-def test_upsample_to_sf_passthrough():
-    # sf_hypno == sf_data → output identical to input
-    assert np.array_equal(hypno_upsample_to_sf(HYPNO_INT, sf_hypno=1, sf_data=1), HYPNO_INT)
+def test_upsample_sleep_statistics():
+    """Sleep statistics must not depend on the epoch length of the hypnogram (no start)."""
+    hyp = simulate_hypnogram(tib=600, n_stages=5, freq="30s", seed=42)
+    hyp_up = hyp.upsample("10s")
+    assert hyp_up.n_epochs == 3 * hyp.n_epochs
+    sstats = hyp.sleep_statistics()
+    sstats_up = hyp_up.sleep_statistics()
+    assert sstats["TIB"] == sstats_up["TIB"] == 600
+    # Values are rounded to 4 decimals, so upsampling can shift the last digit
+    assert sstats.keys() == sstats_up.keys()
+    for key in sstats.keys():
+        np.testing.assert_allclose(
+            sstats[key], sstats_up[key], atol=1e-3, err_msg=f"sleep_stat={key}"
+        )
 
 
-# ---------------------------------------------------------------------------
-# Legacy helper: hypno_fit_to_data
-# ---------------------------------------------------------------------------
+###############################################################################
+# _hypno_fit_to_data
+###############################################################################
 
 
 @pytest.fixture
 def hypno100():
-    return hypno_upsample_to_sf(HYPNO_INT, sf_hypno=1 / 30, sf_data=SF)
+    return np.repeat(HYPNO_INT, SPE)
 
 
-@pytest.mark.parametrize(
-    "data",
-    [
-        np.zeros(HYPNO_INT.size * SPE),  # numpy array
-        pytest.param("raw_exact", id="raw"),  # MNE Raw (resolved in test body)
-    ],
-)
-def test_fit_exact(hypno100, data):
-    if isinstance(data, str) and data == "raw_exact":
-        data = make_raw(HYPNO_INT.size)
-    assert np.array_equal(hypno_fit_to_data(hypno100, data), hypno100)
+def _make_data(n_epochs, as_raw):
+    return make_raw(n_epochs) if as_raw else np.zeros(n_epochs * SPE)
 
 
-def test_fit_pads_when_shorter(hypno100):
+@pytest.mark.parametrize("as_raw", [False, True], ids=["array", "raw"])
+def test_fit_exact(hypno100, as_raw):
+    assert np.array_equal(
+        _hypno_fit_to_data(hypno100, _make_data(HYPNO_INT.size, as_raw)), hypno100
+    )
+
+
+@pytest.mark.parametrize("as_raw", [False, True], ids=["array", "raw"])
+def test_fit_pads_when_shorter(hypno100, as_raw):
     # hypno shorter than data → last value repeated at the end
-    assert (
-        hypno_fit_to_data(hypno100, make_raw(HYPNO_INT.size + 1)).size == (HYPNO_INT.size + 1) * SPE
-    )
-    assert (
-        hypno_fit_to_data(hypno100, np.zeros((HYPNO_INT.size + 1) * SPE)).size
-        == (HYPNO_INT.size + 1) * SPE
-    )
+    n = HYPNO_INT.size + 1
+    assert _hypno_fit_to_data(hypno100, _make_data(n, as_raw)).size == n * SPE
 
 
-def test_fit_crops_when_longer(hypno100):
+@pytest.mark.parametrize("as_raw", [False, True], ids=["array", "raw"])
+def test_fit_crops_when_longer(hypno100, as_raw):
     # hypno longer than data → trailing epochs removed
-    assert (
-        hypno_fit_to_data(hypno100, make_raw(HYPNO_INT.size - 1)).size == (HYPNO_INT.size - 1) * SPE
-    )
-    assert (
-        hypno_fit_to_data(hypno100, np.zeros((HYPNO_INT.size - 1) * SPE)).size
-        == (HYPNO_INT.size - 1) * SPE
-    )
+    n = HYPNO_INT.size - 1
+    assert _hypno_fit_to_data(hypno100, _make_data(n, as_raw)).size == n * SPE
 
 
-# ---------------------------------------------------------------------------
-# Legacy helper: hypno_upsample_to_data (upsample + fit combined)
-# ---------------------------------------------------------------------------
+###############################################################################
+# Deprecated hypno_upsample_to_sf and hypno_upsample_to_data
+###############################################################################
 
 
-def test_upsample_to_data_with_raw():
-    assert (
-        hypno_upsample_to_data(HYPNO_INT, sf_hypno=1 / 30, data=make_raw(HYPNO_INT.size - 1)).size
-        == (HYPNO_INT.size - 1) * SPE
-    )
+def test_deprecated_hypno_upsample_to_sf():
+    with pytest.warns(FutureWarning, match="deprecated and will be removed in v0.9"):
+        out = yasa.hypno_upsample_to_sf(HYPNO_INT, 1 / 30, 1)
+    np.testing.assert_array_equal(out, np.repeat(HYPNO_INT, 30))
 
 
-def test_upsample_to_data_with_array():
-    assert (
-        hypno_upsample_to_data(HYPNO_INT, sf_hypno=1 / 30, data=np.zeros(27250), sf_data=100).size
-        == 27250
-    )
+def test_deprecated_hypno_upsample_to_data():
+    with pytest.warns(FutureWarning, match="deprecated and will be removed in v0.9"):
+        out = yasa.hypno_upsample_to_data(HYPNO_INT, 1 / 30, np.zeros(270), 1)
+    np.testing.assert_array_equal(out, np.repeat(HYPNO_INT, 30))
 
 
-def test_upsample_to_data_different_sf():
-    # double SF → double samples, same padding logic
-    n_expected = 2 * (HYPNO_INT.size * SPE + 250)
-    assert (
-        hypno_upsample_to_data(
-            HYPNO_INT, sf_hypno=1 / 30, data=np.zeros(n_expected), sf_data=200
-        ).size
-        == n_expected
-    )
-
-
-# ---------------------------------------------------------------------------
+###############################################################################
 # Hypnogram.upsample_to_data — length-based path
 #
 # Triggered when EITHER:
@@ -166,13 +151,10 @@ def test_upsample_to_data_different_sf():
 #   - data is MNE Raw with meas_date but Hypnogram has no start
 #
 # In all three cases the behaviour is identical: align at t=0, crop/pad at end.
-# ---------------------------------------------------------------------------
+###############################################################################
 
 
-@pytest.fixture(
-    params=["array", "raw_no_meas", "raw_with_meas"],
-    ids=["array", "raw_no_meas", "raw_with_meas"],
-)
+@pytest.fixture(params=["array", "raw_no_meas", "raw_with_meas"])
 def length_data(request):
     """Factory(n_epochs) → data object that always triggers length-based alignment."""
     if request.param == "array":
@@ -208,32 +190,27 @@ def test_length_based_crops_when_longer(length_data):
     assert np.all(result[-SPE:] == 3)  # 7th epoch (index 6): N3
 
 
-# ---------------------------------------------------------------------------
-# Hypnogram start / tz construction
-# ---------------------------------------------------------------------------
+def test_length_based_custom_mapping_15s():
+    """2-stage hypnogram with 15-s epochs and an inverted mapping, on a longer recording."""
+    values = simulate_hypnogram(tib=120, n_stages=2, seed=42).hypno.to_numpy()
+    hyp = Hypnogram(values, n_stages=2, start="2022-11-10 13:30:10", freq="15s", scorer="Test")
+    hyp.mapping = {"SLEEP": 0, "WAKE": 1}
+    npts = (3600 * 100) + 10 * 100  # 60 min + 10 seconds (at 100 Hz)
+    raw = mne.io.RawArray(
+        np.zeros((2, npts)),
+        mne.create_info(["F4-M1", "F3-M2"], sfreq=100, ch_types="eeg", verbose=False),
+        verbose=False,
+    )
+    hyp_up = hyp.upsample_to_data(raw)
+    assert isinstance(hyp_up, np.ndarray)
+    assert hyp_up.size == npts
+    assert hyp_up.dtype == np.int16
+    np.testing.assert_array_equal(hyp_up[: 15 * 100 * 240 : 1500], hyp.as_int())
+    assert np.all(hyp_up[-10 * 100 :] == -2)  # UNS after hypnogram end
+    np.testing.assert_array_equal(hyp.upsample_to_data(raw.get_data(), sf=100), hyp_up)
 
 
-def test_start_tz_string():
-    # naive string + tz → stored as tz-aware Timestamp in local time
-    hyp = Hypnogram(STAGES, freq="30s", start=HYP_START, tz="Europe/Paris")
-    assert hyp.start == pd.Timestamp(HYP_START, tz="Europe/Paris")
-
-
-def test_start_tz_aware_datetime():
-    # passing a tz-aware datetime directly → tz= not needed
-    aware_dt = datetime.datetime(2024, 1, 15, 23, 0, tzinfo=datetime.timezone.utc)
-    hyp = Hypnogram(STAGES, freq="30s", start=aware_dt)
-    assert hyp.start == pd.Timestamp("2024-01-15 23:00:00", tz="UTC")
-
-
-def test_start_tz_conflict_raises():
-    # tz-aware datetime + tz= → ValueError
-    aware_dt = datetime.datetime(2024, 1, 15, 23, 0, tzinfo=datetime.timezone.utc)
-    with pytest.raises(ValueError, match="already timezone-aware"):
-        Hypnogram(STAGES, freq="30s", start=aware_dt, tz="UTC")
-
-
-# ---------------------------------------------------------------------------
+###############################################################################
 # Hypnogram.upsample_to_data — timestamp-aware path
 #
 # Triggered when BOTH self.start is set AND raw.meas_date is set.
@@ -243,7 +220,7 @@ def test_start_tz_conflict_raises():
 #   index:  0   1   2    3    4    5    6     7     8   9
 #   stage:  W   W   N1   N2   N2   N3   N3   REM   REM  W
 #   int:    0   0    1    2    2    3    3     4     4   0
-# ---------------------------------------------------------------------------
+###############################################################################
 
 
 @pytest.fixture
@@ -346,3 +323,14 @@ def test_non_whole_epoch_offset_warns(caplog):
     with caplog.at_level(logging.WARNING, logger="yasa"):
         hyp.upsample_to_data(raw)
     assert "not a whole number" in caplog.text
+
+
+def test_ts_cropped_raw():
+    # raw.crop() does not update meas_date, so the offset of the first sample (raw.first_time)
+    # must be taken into account. Cropping 4 epochs → the data starts at epoch 4: N2
+    hyp = Hypnogram(STAGES, start=HYP_START)
+    raw = make_raw(N, meas_date=utc(23, 0)).crop(tmin=4 * 30)
+    assert raw.info["meas_date"] == utc(23, 0)
+    result = hyp.upsample_to_data(raw)
+    assert result.size == 6 * SPE
+    assert np.array_equal(result[::SPE], [2, 3, 3, 4, 4, 0])

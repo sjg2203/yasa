@@ -10,15 +10,16 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .detection import _check_data_hypno
-from .hypno import hypno_find_periods
-from .io import is_sleepecg_installed, set_log_level
+from ._validation import _check_data_hypno
+from .hypno import _hypno_find_periods
+from .io import _restore_log_level, is_sleepecg_installed
 
 logger = logging.getLogger("yasa")
 
 __all__ = ["hrv_stage"]
 
 
+@_restore_log_level
 def hrv_stage(
     data,
     sf,
@@ -49,8 +50,7 @@ def hrv_stage(
 
         Can be an upsampled integer array (same number of samples as ``data``) or a
         :py:class:`yasa.Hypnogram` instance (automatically upsampled). To manually upsample an
-        integer array, use :py:meth:`yasa.Hypnogram.upsample_to_data` or
-        :py:func:`yasa.hypno_upsample_to_data`.
+        integer array, use :py:meth:`yasa.Hypnogram.upsample_to_data`.
 
         .. note::
             When passing an integer array, hypnogram values follow this mapping:
@@ -122,7 +122,6 @@ def hrv_stage(
     * Shaffer, F., & Ginsberg, J. P. (2017). An overview of heart rate variability metrics and
       norms. Frontiers in public health, 258.
     """
-    set_log_level(verbose)
     is_sleepecg_installed()
     from sleepecg import detect_heartbeats
 
@@ -143,7 +142,7 @@ def hrv_stage(
     data = np.squeeze(data)
 
     # Find periods of equal duration
-    epochs = hypno_find_periods(hypno, sf, threshold=threshold, equal_length=equal_length)
+    epochs = _hypno_find_periods(hypno, sf, threshold=threshold, equal_length=equal_length)
     assert epochs.shape[0] > 0, f"No epochs longer than {threshold} found in hypnogram."
     epochs = epochs[epochs["values"].isin(include)].reset_index(drop=True)
     # Sort by stage and add epoch number
